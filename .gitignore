@@ -1,0 +1,25 @@
+# OS
+Thumbs.db
+.DS_Store
+
+# Editors
+.vscode/*
+!.vscode/settings.json
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# Generated artifacts (keep .gitkeep, ignore generated content)
+output/artifacts/notebooks/*.py
+output/artifacts/notebooks/*.ipynb
+output/artifacts/warehouse/*.sql
+output/artifacts/pipelines/*.json
+!output/artifacts/**/.gitkeep
