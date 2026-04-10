@@ -9,19 +9,21 @@ A multi-agent system for designing and implementing analytics platforms on Micro
 | **Orchestrator** | `agents/orchestrator.md` | Coordinates the end-to-end workflow across all agents |
 | **Architect** | `agents/architect.md` | Designs technology-agnostic analytics architectures (layers, SCD patterns, metadata framework) |
 | **Modeler** | `agents/modeler.md` | Translates architecture specs into Fabric-specific blueprints (Lakehouse, Warehouse, Pipelines, Notebooks) |
-| **Creator** | *(add externally)* | Generates deployable Fabric artifacts from blueprints |
+| **FabricDataEngineer** | `agents/FabricDataEngineer.agent.md` | Cross-workload Fabric implementation — Spark, SQL, Pipelines, Medallion architecture |
+| **FabricAdmin** | `agents/FabricAdmin.agent.md` | Workspace administration, governance, capacity, security |
+| **FabricAppDev** | `agents/FabricAppDev.agent.md` | Full-stack applications consuming Fabric data (ODBC, XMLA, REST) |
 
 ## Workflow
 
 ```
 Discovery → Architecture Spec → Fabric Blueprint → Deployable Artifacts
-   (Architect)      (Architect)       (Modeler)         (Creator)
+   (Architect)      (Architect)       (Modeler)    (FabricDataEngineer/Admin/AppDev)
 ```
 
 1. **Discovery** — Architect interviews stakeholders to understand source systems, business entities, SLAs, grain, and reporting needs.
 2. **Architecture** — Architect produces `output/architecture-spec.md` with layer definitions, entity catalogue, data flow diagrams, and governance rules.
 3. **Modelling** — Modeler consumes the architecture spec and produces `output/fabric-blueprint.md` with Fabric artifact mappings, DDL, notebook specs, and pipeline definitions.
-4. **Creation** — Creator (added separately) generates deployable artifacts into `output/artifacts/`.
+4. **Creation** — `@FabricDataEngineer` orchestrates cross-workload implementation, delegating to specialised skills (Spark, SQL, KQL, PowerBI). `@FabricAdmin` handles governance. `@FabricAppDev` builds consuming applications.
 
 ## Folder Structure
 
@@ -30,7 +32,10 @@ AnalyticsPlatformAgents/
 ├── agents/                    # Agent definitions (VS Code Copilot discovers these)
 │   ├── orchestrator.md
 │   ├── architect.md
-│   └── modeler.md
+│   ├── modeler.md
+│   ├── FabricDataEngineer.agent.md
+│   ├── FabricAdmin.agent.md
+│   └── FabricAppDev.agent.md
 ├── .prompts/                  # Reusable prompt files
 │   ├── 01-discovery.prompt.md
 │   ├── 02-architecture.prompt.md
@@ -43,6 +48,12 @@ AnalyticsPlatformAgents/
 │   ├── kb-fabric-artifacts.md
 │   ├── kb-fabric-patterns.md
 │   └── kb-fabric-datatypes.md
+├── creator/                       # Fabric Creator skills & knowledge (from skills-for-fabric)
+│   ├── common/                    # 9 shared knowledge files (COMMON-CORE, SPARK-*, SQLDW-*, etc.)
+│   ├── skills/                    # 10 specialised skills (spark-authoring, sqldw-authoring, etc.)
+│   ├── docs/                      # Skill authoring guides, architecture docs
+│   ├── prompt_examples/           # Example prompts for Fabric workflows
+│   └── mcp-setup/                 # MCP server configuration
 ├── output/                    # Generated deliverables
 │   ├── architecture-spec.md
 │   ├── fabric-blueprint.md
@@ -60,11 +71,31 @@ AnalyticsPlatformAgents/
 2. Start with `@orchestrator` in Copilot Chat for a guided session, or invoke agents directly:
    - `@architect` — Run discovery and generate architecture spec
    - `@modeler` — Consume architecture spec and generate Fabric blueprint
-3. Add Creator agents by placing their definition in `agents/` and their knowledge base in `.resources/`.
+   - `@FabricDataEngineer` — Implement cross-workload Fabric solutions
+   - `@FabricAdmin` — Workspace governance and administration
+   - `@FabricAppDev` — Build applications consuming Fabric data
+3. The Creator agents delegate to specialised skills in `creator/skills/` for endpoint-specific implementation.
 
-## Adding Creator Agents
+## Creator Skills (from skills-for-fabric)
 
-Drop the agent `.md` file into `agents/` and any supporting knowledge base files into `.resources/`. The orchestrator will automatically recognise new team members listed in its configuration. Update the orchestrator's team table if needed.
+The `creator/` folder contains the official Microsoft Fabric skills from [gim-home/skills-for-fabric](https://github.com/gim-home/skills-for-fabric):
+
+| Skill | Purpose |
+|-------|---------|
+| `spark-authoring-cli` | Notebook development, Lakehouse management, PySpark engineering |
+| `spark-consumption-cli` | Interactive Spark analysis and exploration |
+| `sqldw-authoring-cli` | T-SQL DDL/DML, Warehouse schema, ETL scripting |
+| `sqldw-consumption-cli` | Read-only T-SQL analytics and exploration |
+| `eventhouse-authoring-cli` | KQL management, Eventhouse operations, ingestion |
+| `eventhouse-consumption-cli` | Read-only KQL queries against Eventhouse |
+| `powerbi-authoring-cli` | Semantic model creation, TMDL, refresh, permissions |
+| `powerbi-consumption-cli` | DAX queries and semantic model discovery |
+| `e2e-medallion-architecture` | End-to-end Bronze/Silver/Gold lakehouse patterns |
+| `check-updates` | Version check for skill updates |
+
+## Adding More Skills
+
+Drop additional skill folders into `creator/skills/` following the same pattern (`SKILL.md` + optional `references/` or `resources/`). Shared knowledge goes in `creator/common/`.
 
 ## Sample Outputs
 

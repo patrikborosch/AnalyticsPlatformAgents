@@ -23,3 +23,15 @@ output/artifacts/notebooks/*.ipynb
 output/artifacts/warehouse/*.sql
 output/artifacts/pipelines/*.json
 !output/artifacts/**/.gitkeep
+
+# Sensitive output files (may contain real tenant/workspace IDs)
+output/*.ps1
+output/*.json
+output/dependency-analysis.md
+output/fabric-tenant-scanner/
+output/BVA/
+
+# Office files (may contain author metadata)
+*.docx
+*.pptx
+*.xlsx
