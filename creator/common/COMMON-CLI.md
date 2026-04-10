@@ -312,6 +312,21 @@ ITEM_ID=$(az rest --method post \
   --query "id" --output tsv)
 ```
 
+**Move item to folder**:
+```bash
+cat > /tmp/body.json << EOF
+{"targetFolderId": "$FOLDER_ID"}
+EOF
+az rest --method post \
+  --resource "https://api.fabric.microsoft.com" \
+  --url "https://api.fabric.microsoft.com/v1/workspaces/$WS_ID/items/$ITEM_ID/move" \
+  --body @/tmp/body.json
+```
+
+Child items (e.g. a Lakehouse's SQL endpoint) are moved automatically. To move back to workspace root, use `--body '{}'`.
+
+> **Note**: `PATCH .../items/$ITEM_ID` (Update Item) does **not** support `folderId`. Use this dedicated `/move` endpoint.
+
 ### Pagination Pattern
 
 Corresponds to COMMON-CORE.md Core Control-Plane REST APIs § Pagination.
