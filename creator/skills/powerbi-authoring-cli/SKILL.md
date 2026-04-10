@@ -72,6 +72,8 @@ description: >
 | Relationships | [tmdl-authoring-guide.md § Relationships](./references/tmdl-authoring-guide.md#relationships) | Relationship declarations, key rules |
 | Hierarchies | [tmdl-authoring-guide.md § Hierarchies](./references/tmdl-authoring-guide.md#hierarchies) | Hierarchy declarations and key rules |
 | Direct Lake Guidelines | [tmdl-authoring-guide.md § Direct Lake Guidelines](./references/tmdl-authoring-guide.md#direct-lake-guidelines) | Direct Lake mode configuration and constraints |
+| Direct Lake API Creation | [direct-lake-api-creation.md](./references/direct-lake-api-creation.md) | **Critical** — TMSL format, OneLake M expression, verified workflow |
+| PBIR Report API Creation | [pbir-report-api-creation.md](./references/pbir-report-api-creation.md) | **Reference** — PBIR format, visual queries, template adaptation (reports are out of scope for this skill) |
 | Calculated Tables | [tmdl-authoring-guide.md § Calculated Tables](./references/tmdl-authoring-guide.md#calculated-tables) | DAX-based calculated table definitions |
 | Date/Calendar Table | [tmdl-authoring-guide.md § Date/Calendar Table](./references/tmdl-authoring-guide.md#datecalendar-table) | Calendar table setup and marking |
 | Parameters | [tmdl-authoring-guide.md § Parameters](./references/tmdl-authoring-guide.md#parameters) | Expression-based parameter declarations |
@@ -132,6 +134,7 @@ az rest --method post \
 ### MUST DO
 
 - **Read the relevant TMDL reference sections BEFORE generating any TMDL** — at minimum read [TMDL Syntax Rules](./references/tmdl-authoring-guide.md#tmdl-syntax-rules) and [Modeling Best Practices](./references/tmdl-authoring-guide.md#modeling-best-practices). If the task involves relationships, hierarchies, calculation groups, security roles, or translations, also read the corresponding sections in [tmdl-authoring-guide.md](./references/tmdl-authoring-guide.md) and [tmdl-advanced-features-guide.md](./references/tmdl-advanced-features-guide.md). Do not generate TMDL from memory.
+- **For Direct Lake semantic models, read [direct-lake-api-creation.md](./references/direct-lake-api-creation.md) FIRST** — Direct Lake via API requires TMSL (model.bim) format with AzureStorage.DataLake M expression. Using SQL TDS data sources or wrong partition sources will fail validation. This is a BLOCKING requirement for API-based Direct Lake creation.
 - **Always pass `--resource`** to `az rest` — omitting it causes silent auth failures. Use the correct audience per the table above.
 - **Always pass `--headers "Content-Type=application/json"`** on POST/PATCH/PUT calls with a `--body` to the Power BI Datasets API — omitting it causes `Unsupported Media Type` errors.
 - **Include ALL definition parts** in `updateDefinition` — modified + unmodified. The API replaces the entire definition; omitting parts deletes them.
