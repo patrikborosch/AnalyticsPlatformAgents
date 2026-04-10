@@ -88,6 +88,7 @@ description: >
 | Notebook Modification Workflow | [notebook-api-operations.md § Workflow](resources/notebook-api-operations.md#workflow-get--decode--modify--encode--upload--verify) | Five-step flow: retrieve, decode, modify, encode, upload |
 | Notebook API Error Reference | [notebook-api-operations.md § Error Reference](resources/notebook-api-operations.md#error-reference) | 411, 400 (updateMetadata), 401, 403 explained |
 | Notebook API Gotchas | [notebook-api-operations.md § Gotchas](resources/notebook-api-operations.md#gotchas) | `/result` suffix, empty body, `\n` per-line rule, `format=ipynb` |
+| Notebook Execution Troubleshooting | [notebook-execution-troubleshooting.md](resources/notebook-execution-troubleshooting.md) | **Critical** — Missing kernel metadata, job submission issues |
 | Default Lakehouse Binding | [notebook-api-operations.md § Default Lakehouse Binding](resources/notebook-api-operations.md#default-lakehouse-binding) | `.ipynb` metadata vs `.py` `# METADATA` block; discover IDs dynamically |
 | Public URL Data Ingestion | [notebook-api-operations.md § Public URL Data Ingestion](resources/notebook-api-operations.md#public-url-data-ingestion-spark) | Use real source URL, stage into `Files/`, then read with Spark |
 | getDefinition (read notebook content) | [notebook-api-operations.md § Step 1 — Retrieve Notebook Content](resources/notebook-api-operations.md#step-1--retrieve-notebook-content-getdefinition) | LRO flow, `?format=ipynb`, empty body (`--body '{}'`) requirement |
@@ -104,6 +105,7 @@ description: >
 ## Must/Prefer/Avoid
 
 ### MUST DO
+- **Include kernel metadata in API-created notebooks** — Notebooks created via API MUST include `kernel_info` and `kernelspec` metadata fields for execution to succeed. See [notebook-execution-troubleshooting.md](resources/notebook-execution-troubleshooting.md) for required structure. Missing metadata causes immediate job failure.
 - **Check for recent jobs BEFORE creating new notebook runs** — Query job instances from last 5 minutes; if recent job exists, monitor it instead of creating duplicate
 - **Capture job instance ID immediately after POST** — Store job ID before any other operations to enable proper monitoring
 - **Verify workspace capacity assignment** before operations — Workspace must have capacity assigned and active

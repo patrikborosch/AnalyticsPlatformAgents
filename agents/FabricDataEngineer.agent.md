@@ -68,6 +68,9 @@ Route to specialized skills for endpoint-specific implementation:
 ## Resources
 
 - Medallion architecture patterns are covered by the `e2e-medallion-architecture` skill
+- Notebook execution troubleshooting: `spark-authoring-cli/resources/notebook-execution-troubleshooting.md`
+- Direct Lake semantic model creation: `powerbi-authoring-cli/references/direct-lake-api-creation.md`
+- PBIR report creation: `powerbi-authoring-cli/references/pbir-report-api-creation.md`
 
 ## Must
 
