@@ -9,6 +9,7 @@ A multi-agent system for designing and implementing analytics platforms on Micro
 | **Orchestrator** | `agents/orchestrator.md` | Coordinates the end-to-end workflow across all agents |
 | **Architect** | `agents/architect.md` | Designs technology-agnostic analytics architectures (layers, SCD patterns, metadata framework) |
 | **Modeler** | `agents/modeler.md` | Translates architecture specs into Fabric-specific blueprints (Lakehouse, Warehouse, Pipelines, Notebooks) |
+| **Creator** | `agents/creator.agent.md` | Dispatcher for Phase 3 — reads blueprint, decomposes tasks, dispatches to Fabric agents in order |
 | **FabricDataEngineer** | `agents/FabricDataEngineer.agent.md` | Cross-workload Fabric implementation — Spark, SQL, Pipelines, Medallion architecture |
 | **FabricAdmin** | `agents/FabricAdmin.agent.md` | Workspace administration, governance, capacity, security |
 | **FabricAppDev** | `agents/FabricAppDev.agent.md` | Full-stack applications consuming Fabric data (ODBC, XMLA, REST) |
@@ -17,13 +18,13 @@ A multi-agent system for designing and implementing analytics platforms on Micro
 
 ```
 Discovery → Architecture Spec → Fabric Blueprint → Deployable Artifacts
-   (Architect)      (Architect)       (Modeler)    (FabricDataEngineer/Admin/AppDev)
+   (Architect)      (Architect)       (Modeler)    (Creator → FabricAdmin → FabricDataEngineer → FabricAppDev)
 ```
 
 1. **Discovery** — Architect interviews stakeholders to understand source systems, business entities, SLAs, grain, and reporting needs.
 2. **Architecture** — Architect produces `output/architecture-spec.md` with layer definitions, entity catalogue, data flow diagrams, and governance rules.
 3. **Modelling** — Modeler consumes the architecture spec and produces `output/fabric-blueprint.md` with Fabric artifact mappings, DDL, notebook specs, and pipeline definitions.
-4. **Creation** — `@FabricDataEngineer` orchestrates cross-workload implementation, delegating to specialised skills (Spark, SQL, KQL, PowerBI). `@FabricAdmin` handles governance. `@FabricAppDev` builds consuming applications.
+4. **Creation** — `@creator` reads the blueprint, decomposes tasks, and dispatches to Fabric agents in order: `@FabricAdmin` (workspaces, governance) → `@FabricDataEngineer` (artifacts, pipelines) → `@FabricAppDev` (consuming applications).
 
 ## Folder Structure
 
@@ -35,7 +36,8 @@ AnalyticsPlatformAgents/
 │   ├── modeler.md
 │   ├── FabricDataEngineer.agent.md
 │   ├── FabricAdmin.agent.md
-│   └── FabricAppDev.agent.md
+│   ├── FabricAppDev.agent.md
+│   └── creator.agent.md
 ├── .prompts/                  # Reusable prompt files
 │   ├── 01-discovery.prompt.md
 │   ├── 02-architecture.prompt.md
@@ -50,7 +52,7 @@ AnalyticsPlatformAgents/
 │   └── kb-fabric-datatypes.md
 ├── creator/                       # Fabric Creator skills & knowledge (from skills-for-fabric)
 │   ├── common/                    # 9 shared knowledge files (COMMON-CORE, SPARK-*, SQLDW-*, etc.)
-│   ├── skills/                    # 10 specialised skills (spark-authoring, sqldw-authoring, etc.)
+│   ├── skills/                    # 12 specialised skills (spark-authoring, sqldw-authoring, etc.)
 │   ├── docs/                      # Skill authoring guides, architecture docs
 │   ├── prompt_examples/           # Example prompts for Fabric workflows
 │   └── mcp-setup/                 # MCP server configuration
@@ -71,10 +73,11 @@ AnalyticsPlatformAgents/
 2. Start with `@orchestrator` in Copilot Chat for a guided session, or invoke agents directly:
    - `@architect` — Run discovery and generate architecture spec
    - `@modeler` — Consume architecture spec and generate Fabric blueprint
+   - `@creator` — Dispatch blueprint tasks to Fabric agents in order
    - `@FabricDataEngineer` — Implement cross-workload Fabric solutions
    - `@FabricAdmin` — Workspace governance and administration
    - `@FabricAppDev` — Build applications consuming Fabric data
-3. The Creator agents delegate to specialised skills in `creator/skills/` for endpoint-specific implementation.
+3. The Fabric agents delegate to specialised skills in `creator/skills/` for endpoint-specific implementation.
 
 ## Creator Skills (from skills-for-fabric)
 
@@ -92,6 +95,8 @@ The `creator/` folder contains the official Microsoft Fabric skills from [gim-ho
 | `powerbi-consumption-cli` | DAX queries and semantic model discovery |
 | `e2e-medallion-architecture` | End-to-end Bronze/Silver/Gold lakehouse patterns |
 | `check-updates` | Version check for skill updates |
+| `paginated-report-ops` | Paginated report operations |
+| `powerbi-ibcs` | IBCS-compliant PowerBI report patterns |
 
 ## Adding More Skills
 
