@@ -230,6 +230,21 @@ POST /v1/workspaces/<workspaceId>/items/<itemId>/updateDefinition[?updateMetadat
 
 > **Gotcha**: Omitting `?updateMetadata=true` silently ignores the `.platform` part.
 
+### Move Item to Folder
+
+Moves an item (and its child items) to a folder within the same workspace. Use this to organise items into workspace folders after creation.
+
+```
+POST /v1/workspaces/<workspaceId>/items/<itemId>/move
+{ "targetFolderId": "<folderId>" }
+```
+
+Response (200): `{ "value": [{ "id", "displayName", "type", "workspaceId", "folderId" }, ...] }` — returns the moved item plus any child items (e.g. a Lakehouse returns its SQLEndpoint child).
+
+To move an item back to the workspace root, send an empty body `{}`.
+
+> **Note**: The Update Item (`PATCH`) API does **not** support changing `folderId`. You must use this dedicated Move endpoint.
+
 ### Pagination
 
 All list APIs use **continuation-token-based pagination**.
