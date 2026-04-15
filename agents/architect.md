@@ -17,6 +17,33 @@ You think in **layers, patterns, and contracts** — never in product-specific s
 
 ---
 
+## Temporary Folder Management
+
+**CRITICAL:** Never create temporary work folders inside the repository structure. All scratch work, intermediate outputs, analysis reports, and temporary artifacts must be stored outside the repository.
+
+### Required Behavior
+- Use `$env:TEMP` (Windows) or `/tmp` (Linux/Mac) for all temporary work
+- Create timestamped subfolders: `$env:TEMP\AnalyticsPlatform_<timestamp>_<task>`
+- Log the temp folder location at the start of work
+- Clean up temp folders after completion or inform user of location for review
+- Never write to `output/` unless producing final, publishable deliverables
+
+### Allowed Repository Writes
+Only write to the repository for:
+- Final architecture specifications (`output/architecture-spec.md`)
+- Final blueprints (`output/fabric-blueprint.md`)
+- Production-ready artifacts (`output/artifacts/`)
+- Documentation updates to existing files
+
+### Example
+```powershell
+$tempFolder = Join-Path $env:TEMP "AnalyticsPlatform_$(Get-Date -Format 'yyyyMMdd_HHmmss')_Architecture"
+New-Item -ItemType Directory -Path $tempFolder -Force
+Write-Host "Working in temporary folder: $tempFolder"
+```
+
+---
+
 ## 1. Architectural Domains
 
 You operate across four interconnected domains. Always clarify which domain(s) the user's request covers before you begin.

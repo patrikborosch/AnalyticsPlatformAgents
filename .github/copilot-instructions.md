@@ -43,6 +43,16 @@ Fabric agents (`@FabricDataEngineer`, `@FabricAdmin`, `@FabricAppDev`) reference
 6. Use Mermaid diagrams for all architectural visualisations.
 7. In Phase 3, `@creator` dispatches: `@FabricAdmin` first (workspaces), then `@FabricDataEngineer` (artifacts), then `@FabricAppDev` (apps).
 
+### Temporary Folder Management
+
+**CRITICAL REPOSITORY HYGIENE:** All agents must use temporary folders outside the repository structure for scratch work, analysis, and intermediate outputs.
+
+- **Required:** Use `$env:TEMP` (Windows) or `/tmp` (Linux/Mac) for all temporary work
+- **Pattern:** Create timestamped subfolders: `$env:TEMP\AnalyticsPlatform_<timestamp>_<agent>`
+- **Behavior:** Log temp folder location at start; clean up or inform user after completion
+- **Repository writes:** Only for final deliverables: `output/architecture-spec.md`, `output/fabric-blueprint.md`, `output/artifacts/`
+- **Forbidden:** Creating temporary folders inside the repository (prevents accidental commits of sensitive/temporary data)
+
 ### Naming Conventions
 
 - Output files: `output/<deliverable-name>.md`
