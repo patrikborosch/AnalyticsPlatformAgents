@@ -25,6 +25,8 @@ output/artifacts/pipelines/*.json
 !output/artifacts/**/.gitkeep
 
 # Sensitive output files (may contain real tenant/workspace IDs)
+# NOTE: Agents are instructed to use $env:TEMP for temporary work folders
+# Only final, publishable deliverables should be written to output/
 output/*.ps1
 output/*.json
 output/dependency-analysis.md

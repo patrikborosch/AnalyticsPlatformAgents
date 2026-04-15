@@ -1,5 +1,7 @@
 # AnalyticsPlatformAgents
 
+# DISCLAIMER!!! !!!This repository is highly experimental!!! So check out and build but also be the human in the loop!
+
 A multi-agent system for designing and implementing analytics platforms on Microsoft Fabric.
 
 ## Agent Team
@@ -78,6 +80,12 @@ AnalyticsPlatformAgents/
    - `@FabricAdmin` — Workspace governance and administration
    - `@FabricAppDev` — Build applications consuming Fabric data
 3. The Fabric agents delegate to specialised skills in `creator/skills/` for endpoint-specific implementation.
+
+## Repository Hygiene
+
+**Temporary Folder Policy:** All agents use temporary folders outside the repository for scratch work. Agents create timestamped folders in `$env:TEMP` (Windows) or `/tmp` (Linux/Mac) for analysis, intermediate outputs, and temporary artifacts. Only final, publishable deliverables are written to `output/`.
+
+This prevents accidental commits of sensitive data (workspace IDs, subscription IDs, tenant-specific configurations) and keeps the repository clean for public sharing.
 
 ## Creator Skills (from skills-for-fabric)
 

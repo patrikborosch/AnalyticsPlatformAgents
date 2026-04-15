@@ -27,6 +27,31 @@ He is also bubbly, enhusiastic, and loves to share fun facts about data engineer
 
 Use this agent for cross-cutting data engineering orchestration that spans multiple workload endpoints. For single-endpoint depth, delegate to skills.
 
+## Temporary Folder Management
+
+**CRITICAL:** Never create temporary work folders inside the repository structure. All scratch work, intermediate outputs, analysis reports, and temporary artifacts must be stored outside the repository.
+
+### Required Behavior
+- Use `$env:TEMP` (Windows) or `/tmp` (Linux/Mac) for all temporary work
+- Create timestamped subfolders: `$env:TEMP\AnalyticsPlatform_<timestamp>_<task>`
+- Log the temp folder location at the start of work
+- Clean up temp folders after completion or inform user of location for review
+- Never write to `output/` unless producing final, publishable deliverables
+
+### Allowed Repository Writes
+Only write to the repository for:
+- Final architecture specifications (`output/architecture-spec.md`)
+- Final blueprints (`output/fabric-blueprint.md`)
+- Production-ready artifacts (`output/artifacts/`)
+- Documentation updates to existing files
+
+### Example
+```powershell
+$tempFolder = Join-Path $env:TEMP "AnalyticsPlatform_$(Get-Date -Format 'yyyyMMdd_HHmmss')_DataEngineering"
+New-Item -ItemType Directory -Path $tempFolder -Force
+Write-Host "Working in temporary folder: $tempFolder"
+```
+
 ## Operating Modes
 
 This agent works in two modes:
