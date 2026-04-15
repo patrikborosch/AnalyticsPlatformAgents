@@ -1,6 +1,6 @@
 # AnalyticsPlatformAgents
 
-# DISCLAIMER!!! !!!This repository is highly experimental!!! So check out and build but also be the human in the loop!
+> **Note:** This project is experimental. Agent-generated outputs should be reviewed before use in production environments. Always be the human in the loop.
 
 A multi-agent system for designing and implementing analytics platforms on Microsoft Fabric.
 
