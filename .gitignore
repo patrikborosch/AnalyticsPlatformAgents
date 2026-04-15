@@ -3,8 +3,7 @@ Thumbs.db
 .DS_Store
 
 # Editors
-.vscode/*
-!.vscode/settings.json
+.vscode/
 *.swp
 *.swo
 
