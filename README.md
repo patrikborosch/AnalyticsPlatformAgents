@@ -89,7 +89,7 @@ This prevents accidental commits of sensitive data (workspace IDs, subscription 
 
 ## Creator Skills (from skills-for-fabric)
 
-The `creator/` folder contains the official Microsoft Fabric skills from [gim-home/skills-for-fabric](https://github.com/gim-home/skills-for-fabric):
+The `creator/` folder contains the official Microsoft Fabric skills from [aka.ms/skills-for-fabric):
 
 | Skill | Purpose |
 |-------|---------|
