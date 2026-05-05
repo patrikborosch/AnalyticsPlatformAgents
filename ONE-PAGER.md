@@ -114,7 +114,8 @@ creator/
   ├── common/    9 shared knowledge files (Spark, SQL, KQL, CLI patterns)
   └── docs/      Guides for authoring new skills and extending the system
 .resources/      6 knowledge base files (SCD patterns, layered arch, Fabric artifacts)
-output/          Generated deliverables — specs, blueprints, notebooks, DDL, pipelines
+output/          Runtime target for agent deliverables (gitignored)
+output_examples/ Reference examples — specs, blueprints, notebooks, DDL, pipelines
 ```
 
 ---

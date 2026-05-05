@@ -58,13 +58,12 @@ AnalyticsPlatformAgents/
 │   ├── docs/                      # Skill authoring guides, architecture docs
 │   ├── prompt_examples/           # Example prompts for Fabric workflows
 │   └── mcp-setup/                 # MCP server configuration
-├── output/                    # Generated deliverables
+├── output/                    # Runtime target for agent-generated deliverables
+│   └── artifacts/             # Skeleton (notebooks, warehouse, pipelines)
+├── output_examples/           # Committed example deliverables
 │   ├── architecture-spec.md
 │   ├── fabric-blueprint.md
-│   └── artifacts/             # Creator output (notebooks, warehouse DDL, pipelines)
-│       ├── notebooks/
-│       ├── warehouse/
-│       └── pipelines/
+│   └── artifacts/
 └── .github/
     └── copilot-instructions.md
 ```
@@ -112,6 +111,8 @@ Drop additional skill folders into `creator/skills/` following the same pattern 
 
 ## Sample Outputs
 
-The `output/` folder contains example deliverables from a Contoso Rail Visitors analytics platform design:
+The `output_examples/` folder contains example deliverables from a Contoso Rail Visitors analytics platform design:
 - `architecture-spec.md` — Three-layer architecture (Landing/Persistence/Presentation) with SCD2, metadata-driven ETL, 6 Mermaid diagrams
 - `fabric-blueprint.md` — Fabric implementation with Lakehouse (L0/L1), Warehouse (L2), Notebook specs, Pipeline definitions
+
+At runtime, agents write into `output/` (gitignored except skeleton). See `output/README.md` for details.
