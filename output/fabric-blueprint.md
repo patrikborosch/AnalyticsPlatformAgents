@@ -131,7 +131,7 @@ graph LR
     SC_L1 -->|"read by"| SP_REF
     SC_L1 -->|"read by"| SP_AGG
 
-    WH_L2 -.->|"DirectLake-ready<br/>(Semantic Model Agent)"| WS_PRES
+    WH_L2 -.->|"DirectLake-ready<br/>(@FabricDataEngineer)"| WS_PRES
     WH_META -.->|"metadata read<br/>by all Notebooks/SPs"| NB_ING
     WH_META -.->|"metadata read"| NB_SCD
     WH_META -.->|"metadata read"| SP_REF
@@ -1156,7 +1156,7 @@ flowchart TD
 
 ## 9. Quality Framework
 
-> **Note:** Semantic Model and Report specifications are out of scope for the Fabric Modeler. The L2 Warehouse tables are designed for DirectLake consumption. A dedicated **Semantic Model Agent** receives the L2 table inventory and FK relationships from this blueprint to build the Semantic Model, DAX measures, and Reports.
+> **Note:** Semantic Model and Report creation is handled by **`@FabricDataEngineer`** (via `powerbi-authoring-cli`). The L2 Warehouse tables are designed for DirectLake consumption. `@FabricDataEngineer` receives the L2 table inventory and FK relationships from this blueprint to build the Semantic Model, DAX measures, and Reports.
 
 ### Quality Rule Types
 
@@ -1310,7 +1310,7 @@ ALTER TABLE lh_persist.dim_customer SET TBLPROPERTIES (
 - [x] All process specs complete (5 Notebooks, 3 Stored Procedures)
 - [x] All pipeline specs complete (`pl_main_orchestrator` with full activity list)
 - [x] Metadata repository defined (12 tables, full T-SQL DDL, seed data)
-- [ ] Semantic model — **out of scope** (Semantic Model Agent)
+- [ ] Semantic model — **`@FabricDataEngineer`** via `powerbi-authoring-cli`
 - [x] Quality framework defined (rule types, severity levels, alert strategy)
 - [x] Rollback strategy defined (Delta Time Travel, recovery runbook)
 - [x] Mermaid diagrams embedded (architecture, cross-workspace, pipeline)
@@ -1328,4 +1328,4 @@ ALTER TABLE lh_persist.dim_customer SET TBLPROPERTIES (
 7. **Create `pl_main_orchestrator`** — Data Pipeline with all activities wired
 8. **Set up Shortcuts** — L0→L1, L1→L2 OneLake Shortcuts
 9. **Deploy Metadata** — Run DDL + seed scripts in `wh_meta`
-10. *(Semantic Model & Reports — handled by Semantic Model Agent)*
+10. **Semantic Model & Reports** — `@FabricDataEngineer` via `powerbi-authoring-cli` (Direct Lake on L2 tables)

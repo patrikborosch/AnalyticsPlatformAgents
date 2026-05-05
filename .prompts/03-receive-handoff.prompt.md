@@ -30,7 +30,7 @@ For each architectural element, determine the Fabric artifact:
 | Current-state refresh | Stored Procedure in Warehouse |
 | Quality checks | Notebook `nb_quality_check` |
 | Orchestration | Data Pipeline `pl_main_orchestrator` |
-| Semantic layer | *(out of scope — Semantic Model Agent)* |
+| Semantic layer | `@FabricDataEngineer` via `powerbi-authoring-cli` |
 
 ### Step 3 — Produce Layer by Layer
 Work through each layer producing:
@@ -40,7 +40,7 @@ Work through each layer producing:
 4. **Metadata:** T-SQL DDL for all metadata tables, seed data
 5. **Pipelines:** Full activity specifications
 
-> **Note:** Semantic Model and Report specifications are out of scope (handled by the Semantic Model Agent).
+> **Note:** Semantic Model and Report creation is handled by `@FabricDataEngineer` (via `powerbi-authoring-cli`). The modeler provides the L2 table inventory and FK relationships needed for DirectLake model construction.
 
 ### Step 4 — Produce Mermaid Diagrams
 - Fabric Architecture Diagram (workspaces, artifacts, data flow)

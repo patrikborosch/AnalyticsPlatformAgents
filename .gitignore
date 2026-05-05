@@ -36,3 +36,11 @@ output/BVA/
 *.docx
 *.pptx
 *.xlsx
+
+# Environment / secrets
+.env
+.env.*
+*.env
+.secrets
+*.pem
+*.key

@@ -487,7 +487,7 @@ WHEN NOT MATCHED BY SOURCE THEN
 | Files → L0 | Notebook or Copy Activity | Notebook reads from OneLake Files section, or Copy from ADLS/Blob |
 | L0 → L1 | Notebook (PySpark) | Same Lakehouse or cross-Lakehouse Shortcut |
 | L1 → L2 | Stored Procedure or Notebook | **Shortcut** from L1 Lakehouse into L2 Warehouse, or three-part naming |
-| L2 → Semantic | *(out of scope — Semantic Model Agent)* | DirectLake mode on Warehouse tables |
+| L2 → Semantic | `@FabricDataEngineer` via `powerbi-authoring-cli` | DirectLake mode on Warehouse tables |
 | Metadata → All | SQL queries | All Notebooks/SPs read metadata via Warehouse connection |
 
 ---
@@ -559,9 +559,9 @@ Notebooks in `ws-landing` and `ws-persist` read metadata from `wh_meta` via:
 
 ---
 
-## 10. Semantic Model & Reports — Out of Scope
+## 10. Semantic Model & Reports
 
-> Semantic Model and Report specifications are handled by the **Semantic Model Agent** (separate agent). The Fabric Modeler produces L2 Warehouse tables designed for DirectLake consumption. The Semantic Model Agent receives the L2 table inventory and FK relationships from this blueprint to build the Semantic Model and Reports.
+> Semantic Model and Report creation is handled by **`@FabricDataEngineer`** (via the `powerbi-authoring-cli` skill). The Fabric Modeler produces L2 Warehouse tables designed for DirectLake consumption. `@FabricDataEngineer` receives the L2 table inventory and FK relationships from this blueprint to build the Semantic Model, DAX measures, and Reports.
 
 ---
 
@@ -613,7 +613,7 @@ Complete list of all Fabric items to create, with workspace assignment.
 ### 12.2 Table Definitions (DDL)
 - Lakehouse tables: column list with Spark types, Delta properties, partition/Z-order strategy
 - Warehouse tables: full T-SQL `CREATE TABLE` with constraints and indexes
-- Relationships: FK specifications (documented in DDL; enforced by downstream Semantic Model Agent)
+- Relationships: FK specifications (documented in DDL; enforced by downstream `@FabricDataEngineer` via `powerbi-authoring-cli`)
 
 ### 12.3 Process Specifications
 - **Notebook specs**: parameters, logic summary, input/output tables, Spark config
@@ -680,4 +680,4 @@ Before handoff, verify each agent has what it needs:
 4. **Shortcuts over copies** — Use OneLake Shortcuts for cross-layer access. Never duplicate data between layers unless there's a performance justification.
 5. **Delta Time Travel for rollback** — No explicit snapshot tables needed in Fabric. Delta Lake's native versioning provides the rollback mechanism.
 6. **Workspace isolation** — Separate workspaces per layer for security and lifecycle management.
-7. **Semantic Model is out of scope** — L2 tables are designed for DirectLake consumption but the Semantic Model and Reports are produced by a separate Semantic Model Agent.
+7. **Semantic Model is in scope for `@FabricDataEngineer`** — L2 tables are designed for DirectLake consumption. The Semantic Model and Reports are produced by `@FabricDataEngineer` via the `powerbi-authoring-cli` skill.
