@@ -103,6 +103,12 @@ After registration, verify the MCP server is available:
 "List all workspaces using Fabric MCP"
 ```
 
+## Security Notes
+
+- **Token handling**: Prefer environment variable references (`${FABRIC_MCP_TOKEN}`) over raw tokens in config files. Never commit tokens to version control.
+- **`npx -y` supply chain**: The Claude Desktop integration uses `npx -y @anthropic/mcp-proxy` which auto-installs a package without confirmation. Pin the version number explicitly and audit the package before first use. For production environments, consider pre-installing globally (`npm i -g @anthropic/mcp-proxy@0.1.0`).
+- **Input validation**: The registration scripts validate inputs against shell metacharacters. If you encounter validation errors, ensure your server URL and name contain only standard URL characters.
+
 ## Troubleshooting
 
 ### Server Not Found

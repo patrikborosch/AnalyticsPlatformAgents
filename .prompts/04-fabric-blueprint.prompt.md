@@ -79,7 +79,7 @@ For each pipeline:
 - [ ] All process specs complete
 - [ ] All pipeline specs complete
 - [ ] Metadata repository defined
-- [ ] Semantic model — out of scope (Semantic Model Agent)
+- [ ] Semantic model — `@FabricDataEngineer` via `powerbi-authoring-cli`
 - [ ] Quality framework defined
 - [ ] Mermaid diagrams embedded
 - [ ] Naming conventions documented
