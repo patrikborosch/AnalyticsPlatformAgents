@@ -145,14 +145,14 @@ The `definition.pbism` file must have a minimal schema:
 ### OneLake Path Structure
 
 Given:
-- Workspace ID: `913bd2f8-fd92-4c7a-8463-aa51ffdba4cc`
-- Lakehouse ID: `f1aa7609-514b-4ead-9cba-e14af725430b`
+- Workspace ID: `aaaa1111-bbbb-cccc-dddd-eeee2222ffff`
+- Lakehouse ID: `ffff3333-eeee-dddd-cccc-bbbb4444aaaa`
 - Lakehouse Name: `ClaimData`
 - Delta tables: `customers`, `policies`, `claims`
 
 OneLake path:
 ```
-https://onelake.dfs.fabric.microsoft.com/913bd2f8-fd92-4c7a-8463-aa51ffdba4cc/f1aa7609-514b-4ead-9cba-e14af725430b
+https://onelake.dfs.fabric.microsoft.com/aaaa1111-bbbb-cccc-dddd-eeee2222ffff/ffff3333-eeee-dddd-cccc-bbbb4444aaaa
 ```
 
 ### model.bim Structure (Minimal)
@@ -238,7 +238,7 @@ https://onelake.dfs.fabric.microsoft.com/913bd2f8-fd92-4c7a-8463-aa51ffdba4cc/f1
       {
         "name": "DirectLakeSource",
         "kind": "m",
-        "expression": "let\\n    Source = AzureStorage.DataLake(\\\"https://onelake.dfs.fabric.microsoft.com/913bd2f8-fd92-4c7a-8463-aa51ffdba4cc/f1aa7609-514b-4ead-9cba-e14af725430b\\\", [HierarchicalNavigation=true])\\nin\\n    Source"
+        "expression": "let\\n    Source = AzureStorage.DataLake(\\\"https://onelake.dfs.fabric.microsoft.com/aaaa1111-bbbb-cccc-dddd-eeee2222ffff/ffff3333-eeee-dddd-cccc-bbbb4444aaaa\\\", [HierarchicalNavigation=true])\\nin\\n    Source"
       }
     ]
   }
@@ -257,7 +257,7 @@ https://onelake.dfs.fabric.microsoft.com/913bd2f8-fd92-4c7a-8463-aa51ffdba4cc/f1
 
 ```powershell
 # Variables
-$workspaceId = "913bd2f8-fd92-4c7a-8463-aa51ffdba4cc"
+$workspaceId = "aaaa1111-bbbb-cccc-dddd-eeee2222ffff"
 $modelName = "InsuranceClaimsModel"
 
 # Get access token

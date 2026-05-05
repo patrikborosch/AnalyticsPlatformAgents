@@ -35,7 +35,7 @@ definition/perspectives/<Name>.tmdl    ← perspectives
 The database file **must** start with a `database` object declaration (GUID or name), not a bare property:
 
 ```tmdl
-database 7124f8d8-6199-44fe-b35d-7f7f06b3e1c6
+database abcd1234-ef56-7890-abcd-ef1234567890
 	compatibilityLevel: 1702
 	compatibilityMode: powerBI
 	language: 1033
