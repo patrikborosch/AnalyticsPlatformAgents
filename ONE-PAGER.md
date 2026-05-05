@@ -19,7 +19,8 @@ No boilerplate. No manual SDK wiring. Just describe what you need.
 | **@orchestrator** | Coordinates the full workflow end-to-end | *"Build an analytics platform for our sales data"* |
 | **@architect** | Designs layered architectures, SCD patterns, metadata frameworks | *"Design a data platform with SCD Type 2 for customers"* |
 | **@modeler** | Translates architecture into Fabric-specific blueprints | *"Generate a Fabric blueprint from the architecture spec"* |
-| **@FabricDataEngineer** | Builds the solution — Spark notebooks, SQL warehouses, pipelines | *"Deploy the medallion architecture to my workspace"* |
+| **@creator** | Dispatcher for Phase 3 — decomposes blueprint into agent tasks | *"Execute the fabric blueprint"* |
+| **@FabricDataEngineer** | Builds the solution — Spark notebooks, SQL warehouses, pipelines, semantic models | *"Deploy the medallion architecture to my workspace"* |
 | **@FabricAdmin** | Manages workspaces, governance, capacity, security, migrations | *"Document my workspace"* / *"Migrate paginated reports"* |
 | **@FabricAppDev** | Builds applications consuming Fabric data (Python, ODBC, REST) | *"Build a dashboard app connected to my warehouse"* |
 
@@ -45,7 +46,7 @@ Discovery → Architecture Spec → Fabric Blueprint → Deployed Artifacts
 
 ---
 
-## 12 Specialized Skills
+## 13 Specialized Skills
 
 The agents delegate to battle-tested skills for endpoint-specific work, most of them derived from the [AI Skills in Microsoft Fabric](https://blog.fabric.microsoft.com/en-us/blog/introducing-ai-skills-in-microsoft-fabric-now-in-public-preview?ft=Bogdan%20Crivat:author) project by Bogdan Crivat and some built during some vibe coding sessions:
 
@@ -61,6 +62,7 @@ The agents delegate to battle-tested skills for endpoint-specific work, most of 
 | `powerbi-consumption-cli` | Query semantic models, manage refreshes |
 | `powerbi-ibcs` | IBCS-compliant chart design patterns |
 | `e2e-medallion-architecture` | Full Bronze/Silver/Gold implementation |
+| `paginated-report-authoring` | Author paginated reports (.rdl) from scratch |
 | `paginated-report-ops` | PBIRS → Fabric migration (export, repoint, import .rdl) |
 | `check-updates` | Auto-check for skill updates from marketplace |
 
@@ -106,9 +108,9 @@ That's it. The agents handle the rest.
 ## Repo Structure at a Glance
 
 ```
-agents/          6 agent definitions (orchestrator, architect, modeler, engineer, admin, appdev)
+agents/          7 agent definitions (orchestrator, architect, modeler, creator, engineer, admin, appdev)
 creator/
-  ├── skills/    12 specialized skills with tested workflows
+  ├── skills/    13 specialized skills with tested workflows
   ├── common/    9 shared knowledge files (Spark, SQL, KQL, CLI patterns)
   └── docs/      Guides for authoring new skills and extending the system
 .resources/      6 knowledge base files (SCD patterns, layered arch, Fabric artifacts)
