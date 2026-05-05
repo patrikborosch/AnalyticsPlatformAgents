@@ -74,6 +74,7 @@ description: >
 | Direct Lake Guidelines | [tmdl-authoring-guide.md § Direct Lake Guidelines](./references/tmdl-authoring-guide.md#direct-lake-guidelines) | Direct Lake mode configuration and constraints |
 | Direct Lake API Creation | [direct-lake-api-creation.md](./references/direct-lake-api-creation.md) | **Critical** — TMSL format, OneLake M expression, verified workflow |
 | PBIR Report API Creation | [pbir-report-api-creation.md](./references/pbir-report-api-creation.md) | **Reference** — PBIR format, visual queries, template adaptation (reports are out of scope for this skill) |
+| PBIR Report Updates (Measure Rename / Rebind) | [pbir-report-api-creation.md § Updating Existing Reports](./references/pbir-report-api-creation.md#updating-existing-reports-measurefield-rename) | **Reference** — getDefinition/updateDefinition for report patching after SM changes |
 | Calculated Tables | [tmdl-authoring-guide.md § Calculated Tables](./references/tmdl-authoring-guide.md#calculated-tables) | DAX-based calculated table definitions |
 | Date/Calendar Table | [tmdl-authoring-guide.md § Date/Calendar Table](./references/tmdl-authoring-guide.md#datecalendar-table) | Calendar table setup and marking |
 | Parameters | [tmdl-authoring-guide.md § Parameters](./references/tmdl-authoring-guide.md#parameters) | Expression-based parameter declarations |
@@ -157,12 +158,13 @@ az rest --method post \
 ### AVOID
 
 - **`updateDefinition` for small changes** — a full definition round-trip is heavy; route to `powerbi-modeling-mcp` for individual object edits.
-- **Report creation** — not supported by this skill. Reports require a separate definition format (PBIR/PBIR-Legacy).
-- **`lineageTag` on new objects** — TMDL auto-generates lineage tags; adding them manually causes conflicts.
+- **Report creation** — not supported by this skill. Reports require a separate definition format (PBIR/PBIR-Legacy). However, report **updates** (measure renames, rebinding) are documented in [pbir-report-api-creation.md § Updating Existing Reports](./references/pbir-report-api-creation.md#updating-existing-reports-measurefield-rename).
+- **`lineageTag` on new objects in `createItemWithDefinition`** — TMDL auto-generates lineage tags on initial creation. However, when adding new objects via `updateDefinition`, you **must** include a `lineageTag` (generate a UUID) — the auto-generation only applies to fresh creation, not updates.
 - **`//` comments in TMDL** — not supported. Use `///` descriptions instead.
 - **`description` property in TMDL** — use `///` syntax above the object instead.
 - **Hardcoded workspace/item IDs** — resolve dynamically via REST API (see [COMMON-CLI.md § Finding Workspaces and Items in Fabric](../../common/COMMON-CLI.md#finding-workspaces-and-items-in-fabric)).
 - **Sending only modified parts in `updateDefinition`** — the API replaces the full definition; missing parts are deleted.
+- **Special characters in measure names** — avoid `%`, `#`, brackets, and long names with spaces for programmatic workflows. See [Measure Naming Best Practices](./references/tmdl-authoring-guide.md#measure-naming-best-practices).
 
 ---
 
@@ -340,6 +342,8 @@ If the response is `202 Accepted`, poll using the LRO pattern from [COMMON-CLI.m
 
 Retrieve TMDL definition for backup, migration, or inspection. `getDefinition` is a **POST** (not GET).
 
+> **LRO Two-Step Pattern**: `getDefinition` almost always returns `202 Accepted`. The LRO polling response (when `status: "Succeeded"`) contains a **second `Location` header** pointing to the actual result payload. You must GET that result URL to obtain the definition parts. This is different from other LROs where the poll response body contains the result directly.
+
 ```bash
 WS_ID="<workspaceId>"
 MODEL_ID="<semanticModelId>"
@@ -352,6 +356,8 @@ RESPONSE=$(az rest --method post --verbose \
   --output json 2>/dev/null)
 
 # 2. If 202, poll the Location header URL until Succeeded, then GET /result
+#    IMPORTANT: After poll returns Succeeded, check the poll response's Location header
+#    for the result URL. GET that URL to retrieve the definition payload.
 
 # 3. Decode each part
 echo "$RESPONSE" | jq -r '.definition.parts[] | .path + " " + .payload' | \
@@ -359,6 +365,40 @@ while read -r path payload; do
   mkdir -p "$(dirname "$path")"
   echo "$payload" | base64 -d > "$path"
 done
+```
+
+### Python LRO Pattern for getDefinition / updateDefinition
+
+When scripting via Python (common for complex multi-step operations), use this pattern:
+
+```python
+import requests, time
+
+def fabric_lro(method, url, headers, json_body=None):
+    """Execute a Fabric API call with LRO handling. Returns final JSON response."""
+    r = requests.request(method, url, headers=headers, json=json_body)
+    if r.status_code == 200:
+        return r.json()
+    if r.status_code != 202:
+        raise Exception(f"HTTP {r.status_code}: {r.text[:500]}")
+    
+    op_url = r.headers.get("Location", "")
+    retry = int(r.headers.get("Retry-After", "5"))
+    
+    for _ in range(60):
+        time.sleep(retry)
+        pr = requests.get(op_url, headers=headers)
+        if pr.status_code == 200:
+            d = pr.json()
+            if d.get("status") in ("Succeeded", "Completed"):
+                # Result URL is in the poll response's Location header
+                result_url = pr.headers.get("Location", "")
+                if result_url:
+                    return requests.get(result_url, headers=headers).json()
+                return d
+            if d.get("status") == "Failed":
+                raise Exception(f"LRO Failed: {d}")
+    raise Exception("LRO timeout")
 ```
 
 ---
@@ -695,6 +735,9 @@ az rest --method post \
 | LRO poll never completes | Token expired during long operation | Re-acquire token in poll loop; increase Retry-After interval |
 | `202 Accepted` but no result | Didn't follow LRO to completion | Poll `Location` header URL until `Succeeded`, then GET `/result` |
 | TMDL validation error on create/update | Syntax error in TMDL content | Check TMDL rules in [tmdl-authoring-guide.md](./references/tmdl-authoring-guide.md); validate before encoding |
+| `Workload_FailedToParseFile` "measure is not a supported property in the current context" | Measure placed at wrong position or wrong indentation depth in table TMDL | Measures must be **after lineageTag, before columns**. DAX body must be indented deeper than properties — see [Measure Indentation Rules](./references/tmdl-authoring-guide.md#measure-indentation-rules) |
+| `Workload_FailedToParseFile` "Unsupported object type - measure" | Measure's multi-line DAX body is at same indent level as `formatString`/`lineageTag` | DAX body: 3+ tabs; properties: 2 tabs. If same level, parser treats `formatString:` as DAX text. See [Measure Indentation Rules](./references/tmdl-authoring-guide.md#measure-indentation-rules) |
+| Ambiguous path / "single relationship between two given tables required" | Multiple active relationship paths exist between tables (diamond pattern) | Set redundant paths to `isActive: false` — see [Ambiguous Path Resolution](./references/tmdl-authoring-guide.md#ambiguous-path-resolution) |
 | Parts missing after updateDefinition | Only modified parts were sent | Must include ALL parts (modified + unmodified) in every update |
 | Error including `.platform` in update | `.platform` not accepted by default | Remove `.platform` from parts, or use `?updateMetadata=true` |
 | Base64 decode produces garbled content | Wrong encoding or line wrapping | Use `base64 -w 0` (no line wrap) or `[Convert]::ToBase64String()` |
