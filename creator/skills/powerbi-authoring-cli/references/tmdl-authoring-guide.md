@@ -19,7 +19,9 @@ description: >
   measure 'Total Sales' = SUM(Sales[Amount])
   ```
 - `//` comments are **not supported** in TMDL
-- Do **not** add `lineageTag` on new objects — it is auto-generated
+- **`lineageTag` handling differs by operation**:
+  - **`createItemWithDefinition`** (new model): Do NOT add `lineageTag` — it is auto-generated
+  - **`updateDefinition`** (modifying existing model): You MUST provide a `lineageTag` (generate a UUID) on new objects being added — auto-generation does not apply to updates
 - Multi-line DAX must be enclosed in triple backticks:
   ```tmdl
   measure 'Profit Margin' = ```
@@ -30,8 +32,63 @@ description: >
           ```
       formatString: 0.00%
   ```
+- **Alternative multi-line DAX** (without triple backticks) — if the DAX is written inline after `=`, the body must be indented **deeper** than the measure's properties. See [Measure Indentation Rules](#measure-indentation-rules) below.
 - Place **measures before columns** in table definitions
 - `formatString` is required on every measure
+
+### Measure Indentation Rules
+
+> **CRITICAL** — incorrect indentation is the #1 cause of `Workload_FailedToParseFile` errors when adding measures via `updateDefinition`.
+
+TMDL uses indentation depth to distinguish the DAX body from measure properties. The rule:
+
+| Element | Indent Level | Tabs |
+|---|---|---|
+| `measure` keyword (inside a table) | 1 tab | `\t` |
+| Measure **properties** (`formatString`, `lineageTag`, `displayFolder`) | 2 tabs | `\t\t` |
+| DAX **body** (multi-line, without triple backticks) | 3+ tabs | `\t\t\t` ... |
+
+**If the DAX body is at the same indentation level as properties, the parser interprets property lines (like `formatString:`) as DAX text, causing a parse error.**
+
+**✅ CORRECT** — DAX at 3 tabs, properties at 2 tabs:
+```tmdl
+table Customer
+	lineageTag: abc-123
+
+	measure ExtPrice_PctDiff_vs_Europe =
+			VAR __BASELINE = CALCULATE(SUM(LineItem[Price]), Region[Name] IN { "EUROPE" })
+			VAR __VALUE = SUM(LineItem[Price])
+			RETURN
+				IF(NOT ISBLANK(__VALUE), DIVIDE(__VALUE - __BASELINE, __BASELINE))
+		formatString: 0.00%;-0.00%;0.00%
+		lineageTag: def-456
+
+	column C_CUSTKEY
+		dataType: int64
+		sourceColumn: C_CUSTKEY
+```
+
+**❌ WRONG** — DAX and properties at same level (2 tabs):
+```tmdl
+	measure ExtPrice_PctDiff_vs_Europe =
+		VAR __BASELINE = CALCULATE(...)   ← 2 tabs (WRONG — same as properties)
+		VAR __VALUE = SUM(...)
+		RETURN ...
+		formatString: 0.00%              ← parser sees this as DAX text!
+		lineageTag: def-456              ← parser sees this as DAX text!
+```
+
+**Key takeaway**: When building TMDL strings programmatically, always ensure the DAX body is at least one tab deeper than `formatString` / `lineageTag` / other properties.
+
+### Measure Naming Best Practices
+
+- **Avoid `%`, `#`, and other special characters** in measure names — they parse correctly in TMDL but create friction in:
+  - Report JSON `queryRef` fields (must escape or match exactly)
+  - DAX query testing via REST API (escaping issues in JSON payloads)
+  - PowerShell/Bash variable interpolation
+- **Keep names concise** — prefer `ExtPrice_PctDiff_vs_Europe` over `Sum of L_EXTENDEDPRICE % difference from EUROPE`
+- **Use underscores or camelCase** for programmatic clarity: `TotalSales`, `Revenue_YoY_Pct`
+- If measure names must contain spaces, always wrap in single quotes in TMDL and use exact case in DAX references
 
 ---
 
@@ -106,6 +163,34 @@ relationship 'Sales - Ship Date to Date'
 - Hide foreign keys on fact tables (`isHidden: true`)
 - No composite keys — use a single surrogate integer key
 - No surrogate keys on fact tables — use natural keys where possible
+
+### Ambiguous Path Resolution
+
+When consolidating multiple models or adding all relationships from a normalized schema, Power BI may reject queries with **"A single relationship between two given tables is required"** or **ambiguous path** errors. This occurs when multiple active paths exist between two tables (e.g., FactTable → DimA → DimB AND FactTable → DimB).
+
+**Resolution strategy:**
+1. Identify which relationship path is used by the **majority of queries** — keep that one active
+2. Set redundant/alternative paths to `isActive: false`
+3. Document which relationships are inactive and when to use `USERELATIONSHIP()` in DAX
+
+**Example** — TPC-H schema with redundant paths:
+```tmdl
+/// Active: primary path for most queries
+relationship OrdersToNation
+	fromColumn: 'ORDERS_LINEITEMS'.L_SUPPKEY
+	toColumn: 'SUPPLIER_NATION_REGION'.S_SUPPKEY
+
+/// Inactive: redundant path — use USERELATIONSHIP() when needed
+relationship SupplierToNation
+	isActive: false
+	fromColumn: SUPPLIER.S_NATIONKEY
+	toColumn: NATION.N_NATIONKEY
+```
+
+**When to deactivate:**
+- Table A → Table B → Table C **AND** Table A → Table C (diamond pattern)
+- Multiple fact tables share dimension tables with different join keys
+- Consolidated models from multiple source models with overlapping relationship coverage
 
 ---
 

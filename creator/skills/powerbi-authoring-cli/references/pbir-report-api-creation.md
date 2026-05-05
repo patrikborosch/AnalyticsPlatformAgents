@@ -448,4 +448,98 @@ if ($response.Headers.ContainsKey('Location')) {
 
 ## Document History
 
+- **2026-04-30**: Added "Updating Existing Reports" section for measure renames and visual field patching via `getDefinition`/`updateDefinition`
 - **2026-04-10**: Initial version documenting verified PBIR report creation workflow via Fabric Items API, based on insurance demo implementation
+
+---
+
+## Updating Existing Reports (Measure/Field Rename)
+
+When a semantic model measure or column is renamed, bound reports must be updated to reference the new name. This is done via the Fabric Items API `getDefinition` → modify → `updateDefinition` cycle.
+
+### Workflow
+
+1. **Fetch report definition** — POST `getDefinition` with `?type=PBIR`
+2. **Decode `report.json`** — this file contains ALL visual field references
+3. **Find-and-replace** the old measure/column name in the decoded content
+4. **Re-encode and POST** all parts back via `updateDefinition`
+
+### Where Measure Names Appear in report.json
+
+Each visual references fields via multiple properties. A single measure may appear in **multiple locations**:
+
+| Property | Format | Example |
+|---|---|---|
+| `Property` (inside field object) | Bare name | `"Property": "Total Sales"` |
+| `queryRef` | `TableName.MeasureName` | `"queryRef": "Customer.Total Sales"` |
+| `nativeQueryRef` | Bare name | `"nativeQueryRef": "Total Sales"` |
+
+When renaming a measure, **all three** must be updated in every visual that references it.
+
+### Python Example
+
+```python
+import requests, base64, json, time
+
+WS_ID = "your-workspace-id"
+RPT_ID = "your-report-id"
+OLD_NAME = "Sum of L_EXTENDEDPRICE % difference from EUROPE"
+NEW_NAME = "ExtPrice_PctDiff_vs_Europe"
+
+headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+# 1. Get report definition (follows LRO if 202)
+r = requests.post(
+    f"https://api.fabric.microsoft.com/v1/workspaces/{WS_ID}/items/{RPT_ID}/getDefinition?type=PBIR",
+    headers=headers
+)
+# ... poll LRO if 202 ...
+parts = response_json["definition"]["parts"]
+
+# 2. Find and replace in all parts
+updated_parts = []
+for p in parts:
+    decoded = base64.b64decode(p["payload"]).decode("utf-8")
+    if OLD_NAME in decoded:
+        decoded = decoded.replace(OLD_NAME, NEW_NAME)
+    updated_parts.append({
+        "path": p["path"],
+        "payload": base64.b64encode(decoded.encode("utf-8")).decode("ascii"),
+        "payloadType": "InlineBase64"
+    })
+
+# 3. Push update (include ALL parts)
+requests.post(
+    f"https://api.fabric.microsoft.com/v1/workspaces/{WS_ID}/items/{RPT_ID}/updateDefinition",
+    headers=headers,
+    json={"definition": {"parts": updated_parts}}
+)
+```
+
+### Key Rules for Report Updates
+
+- **Include ALL parts** in `updateDefinition` — modified and unmodified. Omitting parts deletes them.
+- **Do NOT include `.platform`** in the parts array — it causes errors.
+- **String replacement is safe** for measure/column renames — the names appear as plain text in JSON.
+- **Case-sensitive** — `queryRef`, `Property`, and `nativeQueryRef` values must match exactly.
+- **Multiple visuals** may reference the same measure — always do a global replace across the full report.json content.
+- **`getDefinition` for reports** requires `?type=PBIR` query parameter.
+- **Token audience** for both get/update is Fabric API: `https://api.fabric.microsoft.com`
+
+### Rebinding a Report to a Different Semantic Model
+
+To point a report at a new/consolidated semantic model, update `definition.pbir`:
+
+```json
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definitionProperties/2.0.0/schema.json",
+  "version": "4.0",
+  "datasetReference": {
+    "byConnection": {
+      "connectionString": "semanticmodelid=NEW_SEMANTIC_MODEL_ID"
+    }
+  }
+}
+```
+
+After rebinding, verify all `Entity` and `Property` references in `report.json` still match the new semantic model's table and measure names. If table/measure names differ between old and new SM, update `report.json` accordingly.
