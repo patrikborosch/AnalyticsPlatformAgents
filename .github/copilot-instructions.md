@@ -30,7 +30,7 @@ Architect & Modeler reference files in `.resources/`:
 
 Fabric agents (`@FabricDataEngineer`, `@FabricAdmin`, `@FabricAppDev`) reference files in `creator/`:
 - `creator/common/` — 9 shared knowledge files (COMMON-CORE, COMMON-CLI, SPARK-*, SQLDW-*, EVENTHOUSE-*, ITEM-DEFINITIONS-CORE)
-- `creator/skills/` — 12 specialised skills (spark-authoring-cli, sqldw-authoring-cli, eventhouse-authoring-cli, powerbi-authoring-cli, e2e-medallion-architecture, etc.)
+- `creator/skills/` — 13 specialised skills (spark-authoring-cli, sqldw-authoring-cli, eventhouse-authoring-cli, powerbi-authoring-cli, powerbi-ibcs, paginated-report-authoring, paginated-report-ops, e2e-medallion-architecture, etc.)
 - `creator/docs/` — Skill authoring guides, architecture overview, MCP servers guide
 
 ### Workflow Rules

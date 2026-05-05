@@ -59,44 +59,45 @@ Do **not** count authentication and catalog/workspace discovery toward this thre
 ## Repository Structure
 
 ```text
-skills-for-fabric/
-├── agents/                    # Cross-workload orchestration definitions
+AnalyticsPlatformAgents/
+├── agents/                    # Agent definitions (7 agents)
+│   ├── orchestrator.md
+│   ├── architect.md
+│   ├── modeler.md
+│   ├── creator.agent.md
 │   ├── FabricDataEngineer.agent.md
-│   └── FabricAdmin.agent.md
-├── skills/                    # Individual skill definitions
-│   ├── check-updates/
-│   ├── eventhouse-authoring-cli/
-│   ├── eventhouse-consumption-cli/
-│   ├── powerbi-authoring-cli/
-│   ├── powerbi-consumption-cli/
-│   ├── spark-authoring-cli/
-│   ├── spark-consumption-cli/
-│   ├── sqldw-authoring-cli/
-│   └── sqldw-consumption-cli/
-├── common/                    # Shared reference documents
-│   ├── COMMON-CORE.md
-│   ├── COMMON-CLI.md
-│   └── {ENDPOINT}-{AUTHORING|CONSUMPTION}-CORE.md
-├── plugins/                   # Skill bundles for distribution
-│   ├── authoring/
-│   └── consumption/
-├── mcp-setup/                 # MCP server registration scripts
-├── compatibility/             # Cross-tool configuration files
-├── tests/                     # Quality and routing tests
-├── docs/                      # Contributor documentation
-└── .github/                   # CI/CD, hooks, meta-skills
+│   ├── FabricAdmin.agent.md
+│   └── FabricAppDev.agent.md
+├── .prompts/                  # Reusable prompt files (workflow phases)
+├── .resources/                # Shared knowledge base (SCD, layered arch, etc.)
+├── creator/                   # Fabric skills & knowledge (from skills-for-fabric)
+│   ├── skills/                # 13 specialised skills
+│   ├── common/                # 9 shared reference documents
+│   ├── docs/                  # Contributor documentation (you are here)
+│   ├── mcp-setup/             # MCP server registration scripts
+│   └── prompt_examples/       # Example prompts for Fabric workflows
+├── output/                    # Generated deliverables (specs, blueprints, artifacts)
+└── .github/                   # Repository configuration
+    └── copilot-instructions.md
 ```
+
+> **Provenance note:** The `creator/` subtree was imported from the upstream [skills-for-fabric](https://github.com/TheTrustedAdvisor/skills-for-fabric) project by Bogdan Crivat. Some upstream folders (`plugins/`, `compatibility/`, `tests/`) are not present in this repository because they are not needed for the agent-based workflow here.
 
 ## Folder Purposes
 
 ### `agents/` — Agent Definitions
 
-Each file defines one agent persona for cross-endpoint orchestration.
+Each file defines one agent persona. The repo contains 7 agents in a flat structure:
 
 ```text
 agents/
-├── FabricDataEngineer.agent.md   # Data engineering orchestration agent
-└── FabricAdmin.agent.md        # Fabric administration agent
+├── orchestrator.md              # End-to-end workflow coordinator
+├── architect.md                 # Technology-agnostic analytics architecture design
+├── modeler.md                   # Fabric-specific blueprint generation
+├── creator.agent.md             # Phase 3 dispatcher (decomposes blueprint → agent tasks)
+├── FabricDataEngineer.agent.md  # Data engineering + semantic model orchestration
+├── FabricAdmin.agent.md         # Workspace administration, governance, security
+└── FabricAppDev.agent.md        # Application development consuming Fabric data
 ```
 
 **Key points:**
@@ -104,7 +105,7 @@ agents/
 - Agents coordinate cross-endpoint workflows and delegate endpoint depth to skills
 - Agents should avoid duplicating deep endpoint references already covered by skills/common
 
-### `skills/` — Skill Definitions
+### `creator/skills/` — Skill Definitions
 
 Each subfolder contains one skill with a `SKILL.md` file that defines what the AI assistant should know when that skill is invoked.
 
@@ -116,6 +117,8 @@ skills/
         └── script-templates.md
 ```
 
+**13 skills total:** spark-authoring-cli, spark-consumption-cli, sqldw-authoring-cli, sqldw-consumption-cli, eventhouse-authoring-cli, eventhouse-consumption-cli, powerbi-authoring-cli, powerbi-consumption-cli, powerbi-ibcs, paginated-report-authoring, paginated-report-ops, e2e-medallion-architecture, check-updates.
+
 **Key points:**
 - One folder = one skill
 - Folder name must match the `name` field in SKILL.md frontmatter
@@ -123,7 +126,7 @@ skills/
 
 See: [Skill Authoring Guide](skill-authoring-guide.md)
 
-### `common/` — Shared Reference Documents
+### `creator/common/` — Shared Reference Documents
 
 Contains language-agnostic and implementation-specific reference material that multiple skills can include.
 
@@ -133,6 +136,7 @@ Contains language-agnostic and implementation-specific reference material that m
 | `COMMON-CLI.md` | CLI implementation patterns | `az rest`, `curl`, `jq` recipes |
 | `{ENDPOINT}-AUTHORING-CORE.md` | Authoring reference for an endpoint | T-SQL DDL/DML, KQL `.create-merge table` |
 | `{ENDPOINT}-CONSUMPTION-CORE.md` | Consumption reference for an endpoint | SELECT patterns, KQL `summarize` |
+| `ITEM-DEFINITIONS-CORE.md` | Fabric item definition envelope structures | Base64 payloads, platform files |
 
 **Why common/?**
 - Avoids duplication across skills
@@ -141,36 +145,7 @@ Contains language-agnostic and implementation-specific reference material that m
 
 See: [Common Folder Guide](common-folder-guide.md)
 
-### `plugins/` — Skill Bundles
-
-Groups skills into installable bundles for different user personas.
-
-```text
-plugins/
-├── authoring/
-│   └── plugin.json           # References developer-focused skills
-└── consumption/
-    └── plugin.json           # References consumer-focused skills
-```
-
-**plugin.json** defines which skills are included in each bundle:
-```json
-{
-  "name": "fabric-authoring",
-  "skills": [
-    "../../skills/check-updates",
-    "../../skills/eventhouse-authoring-cli",
-    "../../skills/sqldw-authoring-cli",
-    "../../skills/spark-authoring-cli"
-  ]
-}
-```
-
-> Plugins currently package **skills** for Copilot CLI routing. Agents are maintained separately in `agents/` for cross-tool orchestration.
-
-See: [Plugins Guide](plugins-guide.md)
-
-### `mcp-setup/` — MCP Server Registration
+### `creator/mcp-setup/` — MCP Server Registration
 
 Contains scripts and templates for registering Model Context Protocol (MCP) servers.
 
@@ -189,45 +164,27 @@ mcp-setup/
 
 See: [MCP Servers Guide](mcp-servers-guide.md)
 
-### `compatibility/` — Cross-Tool Configuration
-
-Configuration files for AI coding tools other than GitHub Copilot CLI.
-
-| File | Tool |
-|------|------|
-| `CLAUDE.md` | Claude Code |
-| `.cursorrules` | Cursor |
-| `AGENTS.md` | Codex, Jules, OpenCode |
-| `.windsurfrules` | Windsurf |
-
-These files are copied to project roots to provide agent/skill-compatible behavior in other tools.
-
-### `tests/` — Quality and Routing Tests
-
-Automated tests to validate skill quality and correct routing.
-
-| File | Purpose |
-|------|---------|
-| `test_semantic.py` | Validates naming conventions, description similarity, triggers |
-| `test_skill_routing.py` | Verifies prompts route to correct skills |
-| `conftest.py` | Shared pytest fixtures |
-
-See: [Testing Guide](testing-guide.md)
-
-### `docs/` — Contributor Documentation
+### `creator/docs/` — Contributor Documentation
 
 You are here. Documentation for skill and agent contributors.
 
-### `.github/` — CI/CD and Automation
+### `.resources/` — Knowledge Base
 
-| Folder/File | Purpose |
-|-------------|---------|
-| `workflows/quality-check.yml` | PR quality checks |
-| `workflows/quality_checker.py` | Quality validation script |
-| `workflows/security-audit.yml` | Security scanning |
-| `hooks/pre-commit` | Local pre-commit hook |
-| `skills/` | Meta-skills for repo contributors |
-| `copilot-instructions.md` | Repository-wide Copilot instructions |
+Shared knowledge files referenced by the Architect and Modeler agents:
+
+| File | Topic |
+|------|-------|
+| `kb-scd-fact-patterns.md` | SCD Type 1/2/6 and fact table patterns |
+| `kb-metadata-pipeline-framework.md` | Metadata-driven ETL/ELT framework |
+| `kb-layered-architecture.md` | L0 Landing / L1 Persistence / L2 Presentation |
+| `kb-fabric-artifacts.md` | Fabric artifact catalogue and capabilities |
+| `kb-fabric-patterns.md` | Fabric implementation patterns |
+| `kb-fabric-datatypes.md` | Fabric-supported data types and mappings |
+
+### `.github/` — Repository Configuration
+
+Currently contains:
+- `copilot-instructions.md` — Repository-wide GitHub Copilot Chat instructions
 
 ## Cross-References
 
@@ -242,14 +199,8 @@ Read these companion documents:
 ```
 
 **Rules:**
-- All relative links are validated by the quality checker
-- Broken references block PR merges
 - Use `../../common/` to reference common docs from skills
 - Agents can reference both skills and common docs, while keeping orchestration logic in agent files
-
-## Tooling Insight
-
-GitHub Copilot CLI provides native skill routing. Other tools (Claude, Cursor, Codex, Windsurf) are best served by agent-style instruction layering. The hybrid architecture supports both pathways without duplicating all endpoint detail at the top layer.
 
 ## File Organization Principles
 
@@ -257,9 +208,7 @@ GitHub Copilot CLI provides native skill routing. Other tools (Claude, Cursor, C
 2. **Agents orchestrate** — Cross-workload concerns belong in agents
 3. **Skills are focused** — Endpoint-specific use case, not encyclopedic
 4. **Common is shared** — If 2+ skills need it, put it in common/
-5. **Plugins are bundles** — Group skills by persona
-6. **MCP is separate** — Data connections go in mcp-setup/, not skills
-7. **Tests validate quality** — Every PR runs quality checks
+5. **MCP is separate** — Data connections go in mcp-setup/, not skills
 
 ## Next Steps
 

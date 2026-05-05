@@ -54,7 +54,7 @@ AnalyticsPlatformAgents/
 │   └── kb-fabric-datatypes.md
 ├── creator/                       # Fabric Creator skills & knowledge (from skills-for-fabric)
 │   ├── common/                    # 9 shared knowledge files (COMMON-CORE, SPARK-*, SQLDW-*, etc.)
-│   ├── skills/                    # 12 specialised skills (spark-authoring, sqldw-authoring, etc.)
+│   ├── skills/                    # 13 specialised skills (spark-authoring, sqldw-authoring, powerbi, paginated-report, etc.)
 │   ├── docs/                      # Skill authoring guides, architecture docs
 │   ├── prompt_examples/           # Example prompts for Fabric workflows
 │   └── mcp-setup/                 # MCP server configuration

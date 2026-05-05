@@ -30,8 +30,11 @@ This catalog lists all available skills-for-fabric with their purpose and trigge
 | [e2e-medallion-architecture](#e2e-medallion-architecture) | End-to-End | Implement end-to-end Medallion Architecture (Bronze/Silver/G... |
 | [eventhouse-authoring-cli](#eventhouse-authoring-cli) | Authoring | Execute KQL management commands (table management, ingestion... |
 | [eventhouse-consumption-cli](#eventhouse-consumption-cli) | Consumption | Run KQL queries against Fabric Eventhouse for real-time inte... |
+| [paginated-report-authoring](#paginated-report-authoring) | Authoring | Author Fabric Paginated Reports (.rdl) from scratch, connec... |
+| [paginated-report-ops](#paginated-report-ops) | Operations | Export, modify, and re-import Fabric Paginated Reports (.rdl... |
 | [powerbi-authoring-cli](#powerbi-authoring-cli) | Authoring | Create, manage, and deploy Power BI semantic models inside M... |
 | [powerbi-consumption-cli](#powerbi-consumption-cli) | Consumption | The ONLY supported path for read-only Microsoft Fabric Power... |
+| [powerbi-ibcs](#powerbi-ibcs) | Authoring | Guide to develop Power BI Reports using IBCS and ZebraBI vis... |
 | [spark-authoring-cli](#spark-authoring-cli) | Authoring | Develop Microsoft Fabric Spark/data engineering workflows wi... |
 | [spark-consumption-cli](#spark-consumption-cli) | Consumption | Analyze lakehouse data interactively using Fabric Livy sessi... |
 | [sqldw-authoring-cli](#sqldw-authoring-cli) | Authoring | Execute authoring T-SQL (DDL, DML, data ingestion, transacti... |
@@ -79,6 +82,26 @@ This catalog lists all available skills-for-fabric with their purpose and trigge
 
 ---
 
+## paginated-report-authoring
+
+**Type:** Authoring
+
+**Purpose:** Author Fabric Paginated Reports (.rdl) from scratch, connecting to semantic models via PBIDATASET. Covers RDL XML structure, namespace requirements, data source configuration, DAX dataset queries, Tablix layout, conditional formatting, page setup, and known schema validation pitfalls.
+
+**Location:** `skills/paginated-report-authoring/`
+
+---
+
+## paginated-report-ops
+
+**Type:** Operations
+
+**Purpose:** Export, modify, and re-import Fabric Paginated Reports (.rdl) via REST APIs. Covers data source rebinding, renaming, folder placement, and known platform limitations.
+
+**Location:** `skills/paginated-report-ops/`
+
+---
+
 ## powerbi-authoring-cli
 
 **Type:** Authoring
@@ -96,6 +119,16 @@ This catalog lists all available skills-for-fabric with their purpose and trigge
 **Purpose:** The ONLY supported path for read-only Microsoft Fabric Power BI semantic model (formerly "Power BI dataset") query interactions. Execute DAX queries via the MCP server ExecuteQuery tool to: (1) discover semantic model metadata (tables, columns, measures, relationships, hierarchies, etc.) and their properties, (2) retrieve data from a semantic model.
 
 **Location:** `skills/powerbi-consumption-cli/`
+
+---
+
+## powerbi-ibcs
+
+**Type:** Authoring
+
+**Purpose:** Guide to develop Power BI Reports using IBCS (International Business Communication Standards) and ZebraBI visuals for professional financial dashboards. Covers ZebraBI Cards, Charts (waterfall/variance), and Tables for financial and business reporting in PBIR format.
+
+**Location:** `skills/powerbi-ibcs/`
 
 ---
 
@@ -145,8 +178,9 @@ This catalog lists all available skills-for-fabric with their purpose and trigge
 
 | Type | Skills |
 |------|--------|
-| Authoring | eventhouse-authoring-cli, powerbi-authoring-cli, spark-authoring-cli, sqldw-authoring-cli |
+| Authoring | eventhouse-authoring-cli, paginated-report-authoring, powerbi-authoring-cli, powerbi-ibcs, spark-authoring-cli, sqldw-authoring-cli |
 | Consumption | eventhouse-consumption-cli, powerbi-consumption-cli, spark-consumption-cli, sqldw-consumption-cli |
+| Operations | paginated-report-ops |
 | End-to-End | e2e-medallion-architecture |
 | Utility | check-updates |
 
