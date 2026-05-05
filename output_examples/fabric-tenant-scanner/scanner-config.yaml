@@ -1,0 +1,26 @@
+tenant:
+  tenant_id: "00000000-0000-4000-8000-000000000040"
+  environment: "production"
+
+discovery:
+  include_workspaces: []
+  exclude_workspaces:
+    - "Archive"
+    - "Sandbox"
+  
+analysis:
+  parse_dax: true
+  parse_power_query: true
+  trace_lineage: true
+  
+output:
+  formats:
+    - "json"
+    - "markdown"
+    - "mermaid"
+  directory: "./output"
+  include_metadata: true
+
+security:
+  anonymize_connections: true
+  exclude_credentials: true

@@ -1,0 +1,542 @@
+{
+  "tenant_id": "00000000-0000-4000-8000-000000000040",
+  "scan_timestamp": "2026-04-01T10:44:19.231170",
+  "scan_status": "completed",
+  "workspaces": [
+    {
+      "id": "00000000-0000-4000-8000-000000000008",
+      "name": "My workspace",
+      "capacity_id": null,
+      "description": "",
+      "artifact_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000027",
+      "name": "Main",
+      "capacity_id": "00000000-0000-4000-8000-000000000018",
+      "description": "",
+      "artifact_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000007",
+      "name": "StreamingDemo",
+      "capacity_id": "00000000-0000-4000-8000-000000000018",
+      "description": "",
+      "artifact_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000025",
+      "name": "FUAM Capacity Metrics",
+      "capacity_id": "00000000-0000-4000-8000-000000000018",
+      "description": "",
+      "artifact_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "name": "FUAM",
+      "capacity_id": "00000000-0000-4000-8000-000000000018",
+      "description": "",
+      "artifact_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000016",
+      "name": "demoAgentCreatedWorkspace",
+      "capacity_id": "00000000-0000-4000-8000-000000000018",
+      "description": "Workspace created by Fabric Artifact Builder agent with capacity assigned",
+      "artifact_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000013",
+      "name": "AnalyticsAgentsCreated-ws-analytics-landing",
+      "capacity_id": "00000000-0000-4000-8000-000000000018",
+      "description": "L0 Landing Layer - Raw data ingestion from all sources",
+      "artifact_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000014",
+      "name": "AnalyticsAgentsCreated-ws-analytics-persist",
+      "capacity_id": "00000000-0000-4000-8000-000000000018",
+      "description": "L1 Persistence Layer - SCD2 historisation, quality enforcement",
+      "artifact_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000026",
+      "name": "AnalyticsAgentsCreated-ws-analytics-meta",
+      "capacity_id": "00000000-0000-4000-8000-000000000018",
+      "description": "Metadata Repository - Pipeline metadata, audit log, rollback tracking",
+      "artifact_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000022",
+      "name": "AnalyticsAgentsCreated-ws-analytics-present",
+      "capacity_id": "00000000-0000-4000-8000-000000000018",
+      "description": "L2 Presentation Layer - Business-ready star schema",
+      "artifact_count": 0
+    }
+  ],
+  "semantic_models": [
+    {
+      "id": "00000000-0000-4000-8000-000000000041",
+      "name": "DataflowsStagingWarehouse",
+      "workspace_id": "00000000-0000-4000-8000-000000000027",
+      "workspace_name": "Main",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000032",
+      "name": "EventHistoryDemo",
+      "workspace_id": "00000000-0000-4000-8000-000000000027",
+      "workspace_name": "Main",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000035",
+      "name": "SM_ExternalMirror",
+      "workspace_id": "00000000-0000-4000-8000-000000000027",
+      "workspace_name": "Main",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000039",
+      "name": "SM_ExternalMirror_Optimized",
+      "workspace_id": "00000000-0000-4000-8000-000000000027",
+      "workspace_name": "Main",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "name": "SwissRailwayVisitors",
+      "workspace_id": "00000000-0000-4000-8000-000000000027",
+      "workspace_name": "Main",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "name": "SM_SalesOverview",
+      "workspace_id": "00000000-0000-4000-8000-000000000027",
+      "workspace_name": "Main",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000037",
+      "name": "SM_CustomerAnalytics",
+      "workspace_id": "00000000-0000-4000-8000-000000000027",
+      "workspace_name": "Main",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000029",
+      "name": "SM_SupplierPerformance",
+      "workspace_id": "00000000-0000-4000-8000-000000000027",
+      "workspace_name": "Main",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000036",
+      "name": "SM_ExternalMirror_Consolidated",
+      "workspace_id": "00000000-0000-4000-8000-000000000027",
+      "workspace_name": "Main",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000021",
+      "name": "SM_GeographicSalesAnalysis",
+      "workspace_id": "00000000-0000-4000-8000-000000000027",
+      "workspace_name": "Main",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "name": "SM_ExternalMirror_Complete",
+      "workspace_id": "00000000-0000-4000-8000-000000000027",
+      "workspace_name": "Main",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000019",
+      "name": "NearRealtimeSemanticModel",
+      "workspace_id": "00000000-0000-4000-8000-000000000007",
+      "workspace_name": "StreamingDemo",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000038",
+      "name": "Fabric Capacity Metrics",
+      "workspace_id": "00000000-0000-4000-8000-000000000025",
+      "workspace_name": "FUAM Capacity Metrics",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000017",
+      "name": "FUAM_Item_SM",
+      "workspace_id": "00000000-0000-4000-8000-000000000004",
+      "workspace_name": "FUAM",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000015",
+      "name": "FUAM_Core_SM",
+      "workspace_id": "00000000-0000-4000-8000-000000000004",
+      "workspace_name": "FUAM",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000011",
+      "name": "FUAM_Semantic_Model_Meta_Data_Analyzer_SM",
+      "workspace_id": "00000000-0000-4000-8000-000000000004",
+      "workspace_name": "FUAM",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000028",
+      "name": "FUAM_SQL_Endpoint_Analyzer_SM",
+      "workspace_id": "00000000-0000-4000-8000-000000000004",
+      "workspace_name": "FUAM",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000023",
+      "name": "FUAM_Gateway_Monitoring_From_Files_SM",
+      "workspace_id": "00000000-0000-4000-8000-000000000004",
+      "workspace_name": "FUAM",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000033",
+      "name": "OrderAnalytics",
+      "workspace_id": "00000000-0000-4000-8000-000000000016",
+      "workspace_name": "demoAgentCreatedWorkspace",
+      "created_by": null,
+      "modified_date": null,
+      "data_sources": [],
+      "table_count": 0,
+      "relationship_count": 0,
+      "measure_count": 0
+    }
+  ],
+  "reports": [
+    {
+      "id": "00000000-0000-4000-8000-000000000030",
+      "name": "MyReportTest",
+      "workspace_id": "00000000-0000-4000-8000-000000000027",
+      "workspace_name": "Main",
+      "semantic_model_id": null,
+      "semantic_model_name": null,
+      "created_by": null,
+      "modified_date": null,
+      "page_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000006",
+      "name": "RefreshEveryMinute",
+      "workspace_id": "00000000-0000-4000-8000-000000000027",
+      "workspace_name": "Main",
+      "semantic_model_id": null,
+      "semantic_model_name": null,
+      "created_by": null,
+      "modified_date": null,
+      "page_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000034",
+      "name": "Rep_ExternalMirror",
+      "workspace_id": "00000000-0000-4000-8000-000000000027",
+      "workspace_name": "Main",
+      "semantic_model_id": null,
+      "semantic_model_name": null,
+      "created_by": null,
+      "modified_date": null,
+      "page_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000042",
+      "name": "SwissRailwayVisitors",
+      "workspace_id": "00000000-0000-4000-8000-000000000027",
+      "workspace_name": "Main",
+      "semantic_model_id": null,
+      "semantic_model_name": null,
+      "created_by": null,
+      "modified_date": null,
+      "page_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000024",
+      "name": "Rep_ExternalMirror_2",
+      "workspace_id": "00000000-0000-4000-8000-000000000027",
+      "workspace_name": "Main",
+      "semantic_model_id": null,
+      "semantic_model_name": null,
+      "created_by": null,
+      "modified_date": null,
+      "page_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000012",
+      "name": "Fabric Capacity Metrics",
+      "workspace_id": "00000000-0000-4000-8000-000000000025",
+      "workspace_name": "FUAM Capacity Metrics",
+      "semantic_model_id": null,
+      "semantic_model_name": null,
+      "created_by": null,
+      "modified_date": null,
+      "page_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000010",
+      "name": "FUAM_Item_Analyzer_Report",
+      "workspace_id": "00000000-0000-4000-8000-000000000004",
+      "workspace_name": "FUAM",
+      "semantic_model_id": null,
+      "semantic_model_name": null,
+      "created_by": null,
+      "modified_date": null,
+      "page_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000020",
+      "name": "FUAM_Core_Report",
+      "workspace_id": "00000000-0000-4000-8000-000000000004",
+      "workspace_name": "FUAM",
+      "semantic_model_id": null,
+      "semantic_model_name": null,
+      "created_by": null,
+      "modified_date": null,
+      "page_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000005",
+      "name": "FUAM_Semantic_Model_Meta_Data_Analyzer_Report",
+      "workspace_id": "00000000-0000-4000-8000-000000000004",
+      "workspace_name": "FUAM",
+      "semantic_model_id": null,
+      "semantic_model_name": null,
+      "created_by": null,
+      "modified_date": null,
+      "page_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000009",
+      "name": "FUAM_SQL_Endpoint_Analyzer_Report",
+      "workspace_id": "00000000-0000-4000-8000-000000000004",
+      "workspace_name": "FUAM",
+      "semantic_model_id": null,
+      "semantic_model_name": null,
+      "created_by": null,
+      "modified_date": null,
+      "page_count": 0
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000031",
+      "name": "FUAM_Gateway_Monitoring_From_Files_Report",
+      "workspace_id": "00000000-0000-4000-8000-000000000004",
+      "workspace_name": "FUAM",
+      "semantic_model_id": null,
+      "semantic_model_name": null,
+      "created_by": null,
+      "modified_date": null,
+      "page_count": 0
+    }
+  ],
+  "dependencies": [
+    {
+      "source_id": "00000000-0000-4000-8000-000000000041",
+      "source_name": "DataflowsStagingWarehouse",
+      "source_type": "SemanticModel",
+      "target_id": "00000000-0000-4000-8000-000000000030",
+      "target_name": "MyReportTest",
+      "target_type": "Report",
+      "dependency_type": "consumer",
+      "description": null
+    },
+    {
+      "source_id": "00000000-0000-4000-8000-000000000041",
+      "source_name": "DataflowsStagingWarehouse",
+      "source_type": "SemanticModel",
+      "target_id": "00000000-0000-4000-8000-000000000006",
+      "target_name": "RefreshEveryMinute",
+      "target_type": "Report",
+      "dependency_type": "consumer",
+      "description": null
+    },
+    {
+      "source_id": "00000000-0000-4000-8000-000000000041",
+      "source_name": "DataflowsStagingWarehouse",
+      "source_type": "SemanticModel",
+      "target_id": "00000000-0000-4000-8000-000000000034",
+      "target_name": "Rep_ExternalMirror",
+      "target_type": "Report",
+      "dependency_type": "consumer",
+      "description": null
+    },
+    {
+      "source_id": "00000000-0000-4000-8000-000000000041",
+      "source_name": "DataflowsStagingWarehouse",
+      "source_type": "SemanticModel",
+      "target_id": "00000000-0000-4000-8000-000000000042",
+      "target_name": "SwissRailwayVisitors",
+      "target_type": "Report",
+      "dependency_type": "consumer",
+      "description": null
+    },
+    {
+      "source_id": "00000000-0000-4000-8000-000000000041",
+      "source_name": "DataflowsStagingWarehouse",
+      "source_type": "SemanticModel",
+      "target_id": "00000000-0000-4000-8000-000000000024",
+      "target_name": "Rep_ExternalMirror_2",
+      "target_type": "Report",
+      "dependency_type": "consumer",
+      "description": null
+    },
+    {
+      "source_id": "00000000-0000-4000-8000-000000000038",
+      "source_name": "Fabric Capacity Metrics",
+      "source_type": "SemanticModel",
+      "target_id": "00000000-0000-4000-8000-000000000012",
+      "target_name": "Fabric Capacity Metrics",
+      "target_type": "Report",
+      "dependency_type": "consumer",
+      "description": null
+    },
+    {
+      "source_id": "00000000-0000-4000-8000-000000000017",
+      "source_name": "FUAM_Item_SM",
+      "source_type": "SemanticModel",
+      "target_id": "00000000-0000-4000-8000-000000000010",
+      "target_name": "FUAM_Item_Analyzer_Report",
+      "target_type": "Report",
+      "dependency_type": "consumer",
+      "description": null
+    },
+    {
+      "source_id": "00000000-0000-4000-8000-000000000017",
+      "source_name": "FUAM_Item_SM",
+      "source_type": "SemanticModel",
+      "target_id": "00000000-0000-4000-8000-000000000020",
+      "target_name": "FUAM_Core_Report",
+      "target_type": "Report",
+      "dependency_type": "consumer",
+      "description": null
+    },
+    {
+      "source_id": "00000000-0000-4000-8000-000000000017",
+      "source_name": "FUAM_Item_SM",
+      "source_type": "SemanticModel",
+      "target_id": "00000000-0000-4000-8000-000000000005",
+      "target_name": "FUAM_Semantic_Model_Meta_Data_Analyzer_Report",
+      "target_type": "Report",
+      "dependency_type": "consumer",
+      "description": null
+    },
+    {
+      "source_id": "00000000-0000-4000-8000-000000000017",
+      "source_name": "FUAM_Item_SM",
+      "source_type": "SemanticModel",
+      "target_id": "00000000-0000-4000-8000-000000000009",
+      "target_name": "FUAM_SQL_Endpoint_Analyzer_Report",
+      "target_type": "Report",
+      "dependency_type": "consumer",
+      "description": null
+    },
+    {
+      "source_id": "00000000-0000-4000-8000-000000000017",
+      "source_name": "FUAM_Item_SM",
+      "source_type": "SemanticModel",
+      "target_id": "00000000-0000-4000-8000-000000000031",
+      "target_name": "FUAM_Gateway_Monitoring_From_Files_Report",
+      "target_type": "Report",
+      "dependency_type": "consumer",
+      "description": null
+    }
+  ]
+}

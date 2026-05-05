@@ -76,7 +76,8 @@ AnalyticsPlatformAgents/
 │   ├── docs/                  # Contributor documentation (you are here)
 │   ├── mcp-setup/             # MCP server registration scripts
 │   └── prompt_examples/       # Example prompts for Fabric workflows
-├── output/                    # Generated deliverables (specs, blueprints, artifacts)
+├── output/                    # Runtime target for agent deliverables (gitignored)
+├── output_examples/           # Committed example deliverables (reference only)
 └── .github/                   # Repository configuration
     └── copilot-instructions.md
 ```

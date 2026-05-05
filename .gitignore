@@ -16,21 +16,18 @@ venv/
 # Node
 node_modules/
 
-# Generated artifacts (keep .gitkeep, ignore generated content)
-output/artifacts/notebooks/*.py
-output/artifacts/notebooks/*.ipynb
-output/artifacts/warehouse/*.sql
-output/artifacts/pipelines/*.json
+# Runtime output (agents write here; only skeleton is tracked)
+output/*
+!output/README.md
+!output/artifacts/
+output/artifacts/*
+!output/artifacts/notebooks/
+!output/artifacts/pipelines/
+!output/artifacts/warehouse/
+output/artifacts/notebooks/*
+output/artifacts/pipelines/*
+output/artifacts/warehouse/*
 !output/artifacts/**/.gitkeep
-
-# Sensitive output files (may contain real tenant/workspace IDs)
-# NOTE: Agents are instructed to use $env:TEMP for temporary work folders
-# Only final, publishable deliverables should be written to output/
-output/*.ps1
-output/*.json
-output/dependency-analysis.md
-output/fabric-tenant-scanner/
-output/BVA/
 
 # Office files (may contain author metadata)
 *.docx

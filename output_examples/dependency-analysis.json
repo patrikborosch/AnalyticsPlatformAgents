@@ -1,0 +1,85 @@
+{
+  "reports": [
+    {
+      "name": "RefreshEveryMinute",
+      "datasetId": "00000000-0000-4000-8000-000000000032",
+      "id": "00000000-0000-4000-8000-000000000006",
+      "fieldRefs": [],
+      "datasetName": "EventHistoryDemo",
+      "unusedFields": null,
+      "reportMeasures": [],
+      "format": "unknown"
+    },
+    {
+      "name": "Rep_ExternalMirror",
+      "datasetId": "00000000-0000-4000-8000-000000000035",
+      "id": "00000000-0000-4000-8000-000000000034",
+      "fieldRefs": [],
+      "datasetName": "SM_ExternalMirror",
+      "unusedFields": null,
+      "reportMeasures": [],
+      "format": "unknown"
+    },
+    {
+      "name": "MyReportTest",
+      "datasetId": "00000000-0000-4000-8000-000000000032",
+      "id": "00000000-0000-4000-8000-000000000030",
+      "fieldRefs": [],
+      "datasetName": "EventHistoryDemo",
+      "unusedFields": null,
+      "reportMeasures": [],
+      "format": "unknown"
+    },
+    {
+      "name": "Rep_ExternalMirror_2",
+      "datasetId": "00000000-0000-4000-8000-000000000035",
+      "id": "00000000-0000-4000-8000-000000000024",
+      "fieldRefs": [],
+      "datasetName": "SM_ExternalMirror",
+      "unusedFields": null,
+      "reportMeasures": [],
+      "format": "unknown"
+    },
+    {
+      "name": "SwissRailwayVisitors",
+      "datasetId": "00000000-0000-4000-8000-000000000001",
+      "id": "00000000-0000-4000-8000-000000000042",
+      "fieldRefs": [],
+      "datasetName": "SwissRailwayVisitors",
+      "unusedFields": null,
+      "reportMeasures": [],
+      "format": "unknown"
+    }
+  ],
+  "timestamp": "2026-04-01T09:32:19.1315703+02:00",
+  "workspaceId": "00000000-0000-4000-8000-000000000027",
+  "models": [
+    {
+      "columns": [],
+      "relationships": [],
+      "calcDependencies": [],
+      "name": "SwissRailwayVisitors",
+      "id": "00000000-0000-4000-8000-000000000001",
+      "measures": [],
+      "tables": []
+    },
+    {
+      "columns": [],
+      "relationships": [],
+      "calcDependencies": [],
+      "name": "EventHistoryDemo",
+      "id": "00000000-0000-4000-8000-000000000032",
+      "measures": [],
+      "tables": []
+    },
+    {
+      "columns": [],
+      "relationships": [],
+      "calcDependencies": [],
+      "name": "SM_ExternalMirror",
+      "id": "00000000-0000-4000-8000-000000000035",
+      "measures": [],
+      "tables": []
+    }
+  ]
+}
