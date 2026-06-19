@@ -1,0 +1,807 @@
+name: Fabric Smoke (Shared Test Tenant)
+
+# Triggered manually (workflow_dispatch) for break-glass smoke checks.
+# Automated Fabric smoke coverage now runs through Vally; do not add cron here.
+# Companion docs: docs/ephemeral-tenant-smoke.md + docs/tenant-rotation-runbook.md.
+#
+# Two auth modes are supported (selected automatically by which secrets are set):
+#
+#   Phase A — Direct secrets (works today, no Azure infra required):
+#     secrets: SP_APP_ID, SP_CERT_BASE64, SP_OBJECT_ID, TENANT_DOMAIN
+#     The cert is stored base64-encoded directly in a GH secret; workflow decodes
+#     to PEM and uses az login --service-principal --certificate.
+#
+#   Phase B — OIDC + Key Vault (future, when central KV/UAMI exists):
+#     secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#     vars:    FABRIC_SMOKE_KV_NAME
+#     GitHub OIDC -> UAMI -> KV; KV holds cert + tenant identifiers.
+#     Centralised rotation across many workflows; no long-lived secret in GH.
+#
+# If neither path's secrets are set, the workflow skips with a clear notice.
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-names:
+        description: 'A single test name, a comma-separated list, or "all" (runs every test in tests.json). Default: a single sanity check. Ignored on schedule (which always runs "all").'
+        required: false
+        default: 'dataflows-consumption-list-and-inspect'
+      throttle-limit:
+        description: 'Max concurrent copilot processes. Default 10 (lowered from 50 to reduce ephemeral-tenant contention timeouts). Increase only if the test tenant has headroom.'
+        required: false
+        default: '10'
+      timeout-seconds:
+        description: 'Per-test wall-clock timeout in seconds. Default 900 (was 600). The 600s budget produced edge-oscillation: tests passing at 540-590s flipped to N under load variance run-to-run. 900s eliminates that.'
+        required: false
+        default: '900'
+      model:
+        description: 'AI model to pin via copilot CLI --model. Default claude-sonnet-4.5 for cost / cross-team parity. Override for ad-hoc cross-model runs.'
+        required: false
+        default: 'claude-sonnet-4.5'
+  # workflow_call lets other workflows (e.g., fabric-smoke-pr-touched.yml) invoke this
+  # smoke pipeline with a programmatically-determined test-names list. Same input shape
+  # as workflow_dispatch; outputs are surfaced so callers can post PR comments or
+  # gate on pass counts.
+  workflow_call:
+    inputs:
+      test-names:
+        description: 'Comma-separated test names. Caller computes this from touched skills.'
+        required: false
+        type: string
+        default: 'dataflows-consumption-list-and-inspect'
+      throttle-limit:
+        description: 'Max concurrent copilot processes.'
+        required: false
+        type: string
+        default: '10'
+      timeout-seconds:
+        description: 'Per-test wall-clock timeout in seconds.'
+        required: false
+        type: string
+        default: '900'
+      model:
+        description: 'AI model to pin via copilot CLI --model.'
+        required: false
+        type: string
+        default: 'claude-sonnet-4.5'
+      checkout-ref:
+        description: 'Git ref (commit SHA or branch) to check out before running smoke. Default: github.sha (the commit that triggered this workflow). PR-touched callers should pass github.event.pull_request.head.sha so smoke tests the PR HEAD code, not main.'
+        required: false
+        type: string
+        default: ''
+      caller-pr-number:
+        description: 'PR number when invoked via workflow_call from a PR-scoped caller (e.g. fabric-smoke-pr-touched.yml). Used by the concurrency group below so each PR gets its own per-PR queue slot under the shared-tenant lock. Default empty so direct schedule / workflow_dispatch invocations fall back to github.event_name partitioning.'
+        required: false
+        type: string
+        default: ''
+      caller-event-name:
+        description: 'Event name of the caller workflow when invoked via workflow_call. Used by the concurrency cancel-in-progress expression to enable cancel-on-new-push behaviour for PR callers. Default empty so direct schedule / workflow_dispatch invocations never cancel each other. Passing this explicitly (instead of relying on the documented inheritance of github.event_name from the caller) makes the workflow_call contract self-documenting and defends against future GitHub Actions context-inheritance changes.'
+        required: false
+        type: string
+        default: ''
+    outputs:
+      total-count:
+        description: 'Total number of tests run.'
+        value: ${{ jobs.smoke.outputs.total-count }}
+      pass-count:
+        description: 'Number of tests with status Y.'
+        value: ${{ jobs.smoke.outputs.pass-count }}
+      flaky-count:
+        description: 'Number of tests with status F (known flaky).'
+        value: ${{ jobs.smoke.outputs.flaky-count }}
+      fail-count:
+        description: 'Number of tests that failed or timed out.'
+        value: ${{ jobs.smoke.outputs.fail-count }}
+      failed-tests:
+        description: 'JSON array of non-flaky failed test names (empty array when no failures). Consumed by post-comment jobs to surface which tests went red so authors can spot if any cover their diff.'
+        value: ${{ jobs.smoke.outputs.failed-tests }}
+      auth-ready:
+        description: 'Whether the auth gate accepted the configured secrets ("true" / "false"). Callers should check this BEFORE the count outputs - when false, the smoke job exits success without running any tests, and count outputs are zero.'
+        value: ${{ jobs.smoke.outputs.auth-ready }}
+      auth-mode:
+        description: 'Which auth path was used: "phaseA" (direct secrets), "phaseB" (OIDC + Key Vault), or "skip" (no recognised secret set).'
+        value: ${{ jobs.smoke.outputs.auth-mode }}
+
+permissions:
+  id-token: write   # required for Phase B (OIDC federation -> UAMI)
+  contents: read
+  issues: write     # required for auto-filing rotation issues on AAD errors
+
+# Split the shared-tenant lock per event source so PR traffic cannot starve the
+# nightly schedule.
+#
+# Historical bug: a single static group (`fabric-smoke-shared-tenant`) plus
+# cancel-in-progress: false serialized everything against the tenant. PR-touched
+# runs invoke this workflow via workflow_call and inherit the same group, so
+# during a busy PR day the queue would fill with PR-touched invocations. When a
+# new PR-touched invocation entered the queue, the queued nightly schedule run
+# was cancelled (GitHub auto-cancels PENDING runs in the same group regardless
+# of cancel-in-progress, which only protects the RUNNING run). Lost nightlies
+# observed on 2026-06-02: run 26841869294 queued at 19:06 UTC, cancelled at
+# 19:29 UTC by an arriving PR-touched run.
+#
+# New behaviour: each PR gets its own per-PR queue, schedule has its own slot,
+# workflow_dispatch has its own slot. Workspace names are timestamp-unique so
+# parallel runs do not collide on names; capacity headroom on the shared tenant
+# is the only remaining contention vector, and is addressed by adding capacity
+# rather than by reintroducing global serialization.
+#
+# Inputs caller-pr-number and caller-event-name are passed explicitly by
+# workflow_call callers (e.g. fabric-smoke-pr-touched.yml). They are the
+# source of truth for the partitioning so the contract is self-documenting in
+# the workflow_call signature, not buried in an implicit dependency on
+# github-context inheritance through workflow_call. For DIRECT invocations
+# (schedule, workflow_dispatch), both inputs default to empty and the
+# expression falls back to github.event_name, which is 'schedule' or
+# 'workflow_dispatch' as expected.
+#
+# cancel-in-progress is true ONLY when the caller-event-name input identifies
+# a PR-scoped caller. That mirrors the caller-side cancel-in-progress on
+# fabric-smoke-pr-touched.yml: a new push to the same PR kills the in-flight
+# run for that PR, which is what we want for PRs but never want for schedule
+# or manual dispatch.
+concurrency:
+  group: fabric-smoke-shared-tenant-${{ inputs.caller-pr-number || github.event.pull_request.number || github.event_name }}
+  cancel-in-progress: ${{ inputs.caller-event-name == 'pull_request_target' || github.event_name == 'pull_request_target' }}
+
+jobs:
+  smoke:
+    runs-on: windows-latest   # tests/testFabricSkills.ps1 uses Windows-only commands (cmd.exe, taskkill)
+    outputs:
+      # Default to '0' when summarise doesn't run (e.g. auth gate skips with
+      # ready=false, summarise's `if:` evaluates false, step outputs are unset).
+      # workflow_call callers reading `${{ needs.smoke.outputs.total-count }}`
+      # expect an integer string; an empty string would be falsy in JS/jq.
+      total-count: ${{ steps.summarise.outputs.total-count || '0' }}
+      pass-count: ${{ steps.summarise.outputs.pass-count || '0' }}
+      flaky-count: ${{ steps.summarise.outputs.flaky-count || '0' }}
+      fail-count: ${{ steps.summarise.outputs.fail-count || '0' }}
+      failed-tests: ${{ steps.summarise.outputs.failed-tests || '[]' }}
+      # auth-ready and auth-mode are surfaced from the gate step so workflow_call
+      # callers can distinguish "auth gate skipped, no tests run" from a real
+      # zero-test outcome. The smoke job still exits success when auth-ready is
+      # false (the gate logs a warning and bails politely).
+      auth-ready: ${{ steps.gate.outputs.ready }}
+      auth-mode: ${{ steps.gate.outputs.mode }}
+    # NOTE: An "environment: fabric-smoke-shared-tenant" gate is intended once the
+    # environment + protection rules are set up via the GitHub UI. Until then, the
+    # workflow is workflow_dispatch-only, so only repo collaborators can trigger it.
+    steps:
+      # When invoked via workflow_call (e.g. by fabric-smoke-pr-touched.yml on
+      # a fork PR), the caller may pass `checkout-ref` to test the PR HEAD's
+      # code rather than the base. We pin to a SHA, not a ref name, to defend
+      # against TOCTOU race-swap where the PR HEAD changes between checkout
+      # decision and checkout fetch.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.checkout-ref || github.sha }}
+
+      # When testing PR HEAD content (caller passed `checkout-ref`), restore
+      # the smoke-test INFRASTRUCTURE (runner scripts + schema translator)
+      # from base/main. The PR is allowed to modify the CONTENT under test
+      # (skills/, common/, plugins/) but not the test runner itself. Without
+      # this, a modified `run-smoke-tests.ps1` could emit
+      # `[{passed:"Y"}, ...]` for every test and produce a fake green check.
+      # tests/tests.json is INTENTIONALLY NOT restored: new test entries are
+      # routinely added alongside skill changes (legitimate use), and the
+      # internal trust model accepts that prompt content is contributor-
+      # controlled (per Avi review on PR #209). If that assumption changes,
+      # add tests/tests.json to the restore list below.
+      #
+      # Truthy check (`if: inputs.checkout-ref`) rather than `!= ''` so
+      # null/undefined inputs.checkout-ref on schedule / workflow_dispatch
+      # runs cleanly skip the restore. The `!= ''` form would evaluate to
+      # true for null (null != '') and fire the restore on cron, which
+      # would silently overwrite legitimate runner changes on main.
+      - name: Restore test infrastructure from default branch
+        if: inputs.checkout-ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          default_branch='${{ github.event.repository.default_branch }}'
+          : "${default_branch:=main}"
+          echo "Restoring test infrastructure from origin/${default_branch}..."
+          git fetch --depth=1 origin "${default_branch}"
+          # Restore each file individually so a missing file (e.g. someone
+          # deleted run-full-tests.ps1 on main) doesn't abort the whole step.
+          # Listed files are the trusted execution surface: anything else is
+          # content under test.
+          for f in \
+            tests/run-smoke-tests.ps1 \
+            tests/testFabricSkills.ps1 \
+            tests/run-full-tests.ps1 \
+            tests/copilot-session-telemetry.ps1 \
+            tests/testdata/setup_test_env.py \
+            .github/scripts/smoke-results-to-schema.ps1 ; do
+            if git cat-file -e "origin/${default_branch}:${f}" 2>/dev/null; then
+              git checkout "origin/${default_branch}" -- "${f}"
+              echo "  Restored: ${f}"
+            else
+              echo "  Skipped (not on base): ${f}"
+            fi
+          done
+          echo
+          echo "Test infrastructure files vs default branch (should be empty -- restored):"
+          git diff --name-only "origin/${default_branch}" -- \
+            tests/run-smoke-tests.ps1 tests/testFabricSkills.ps1 \
+            tests/run-full-tests.ps1 tests/copilot-session-telemetry.ps1 \
+            tests/testdata/setup_test_env.py \
+            .github/scripts/smoke-results-to-schema.ps1 \
+            | sed 's/^/  /'
+
+      # -----------------------------------------------------------------
+      # Gate: pick Phase A or Phase B based on which secrets are set.
+      # Sets outputs.mode = "phaseA" | "phaseB" | "skip" and outputs.ready.
+      # -----------------------------------------------------------------
+      - name: Detect auth mode
+        id: gate
+        env:
+          # Phase A
+          SP_APP_ID: ${{ secrets.SP_APP_ID }}
+          SP_CERT_BASE64: ${{ secrets.SP_CERT_BASE64 }}
+          SP_OBJECT_ID: ${{ secrets.SP_OBJECT_ID }}
+          TENANT_DOMAIN_SECRET: ${{ secrets.TENANT_DOMAIN }}
+          # Copilot CLI auth (required for both phases — smoke runner invokes copilot)
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          # Phase B
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          FABRIC_SMOKE_KV_NAME: ${{ vars.FABRIC_SMOKE_KV_NAME }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Copilot CLI auth is required regardless of which Azure-auth phase is selected,
+          # because run-smoke-tests.ps1 invokes `copilot` to execute the test prompts.
+          if [ -z "$COPILOT_GITHUB_TOKEN" ]; then
+            echo "::warning::COPILOT_GITHUB_TOKEN secret is not configured. Smoke harness cannot invoke Copilot CLI."
+            echo "::warning::Create a fine-grained PAT at https://github.com/settings/personal-access-tokens/new with Account-level Copilot Requests permission, then `gh secret set COPILOT_GITHUB_TOKEN`."
+            echo "mode=skip"  >> "$GITHUB_OUTPUT"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          phaseA_ok=true
+          for v in SP_APP_ID SP_CERT_BASE64 SP_OBJECT_ID TENANT_DOMAIN_SECRET; do
+            if [ -z "${!v}" ]; then phaseA_ok=false; break; fi
+          done
+          phaseB_ok=true
+          for v in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID FABRIC_SMOKE_KV_NAME; do
+            if [ -z "${!v}" ]; then phaseB_ok=false; break; fi
+          done
+          if [ "$phaseA_ok" = "true" ]; then
+            echo "::notice::Using Phase A (direct secrets) auth path."
+            echo "mode=phaseA" >> "$GITHUB_OUTPUT"
+            echo "ready=true"   >> "$GITHUB_OUTPUT"
+          elif [ "$phaseB_ok" = "true" ]; then
+            echo "::notice::Using Phase B (OIDC + Key Vault) auth path."
+            echo "mode=phaseB" >> "$GITHUB_OUTPUT"
+            echo "ready=true"   >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Neither Phase A nor Phase B secrets are configured. Skipping smoke run."
+            echo "::warning::Phase A needs: SP_APP_ID, SP_CERT_BASE64, SP_OBJECT_ID, TENANT_DOMAIN."
+            echo "::warning::Phase B needs: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, vars.FABRIC_SMOKE_KV_NAME."
+            echo "mode=skip"  >> "$GITHUB_OUTPUT"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ───────── Phase A: direct secrets ─────────
+      - name: Phase A — materialise SP cert from secret
+        if: steps.gate.outputs.mode == 'phaseA'
+        shell: bash
+        env:
+          SP_APP_ID: ${{ secrets.SP_APP_ID }}
+          SP_CERT_BASE64: ${{ secrets.SP_CERT_BASE64 }}
+          SP_OBJECT_ID: ${{ secrets.SP_OBJECT_ID }}
+          TENANT_DOMAIN_SECRET: ${{ secrets.TENANT_DOMAIN }}
+        run: |
+          set -euo pipefail
+          PEM_PATH="${RUNNER_TEMP}/sp-cert.pem"
+          # SP_CERT_BASE64 is the base64-encoded PEM (already in az-friendly format).
+          # We do NOT support PFX in Phase A (avoids the openssl pkcs12 round-trip).
+          # Strip whitespace/newlines defensively before decode — `gh secret set` via
+          # PowerShell pipes can introduce trailing CRLF which makes `base64 -d` reject
+          # the input ("base64: invalid input"). `tr -d` handles \r, \n, and spaces.
+          printf '%s' "$SP_CERT_BASE64" | tr -d '\r\n ' | base64 -d > "$PEM_PATH"
+          # Sanity check: must contain at least a private key + certificate block.
+          grep -q "BEGIN PRIVATE KEY\|BEGIN RSA PRIVATE KEY" "$PEM_PATH" || { echo "::error::SP_CERT_BASE64 does not decode to a PEM with a private key"; exit 1; }
+          grep -q "BEGIN CERTIFICATE" "$PEM_PATH" || { echo "::error::SP_CERT_BASE64 does not decode to a PEM with a certificate"; exit 1; }
+          # Don't chmod on Windows runners — NTFS ACLs already restrict to runner user.
+          echo "::add-mask::$SP_APP_ID"
+          echo "::add-mask::$SP_OBJECT_ID"
+          {
+            echo "TENANT_DOMAIN=$TENANT_DOMAIN_SECRET"
+            echo "SP_APP_ID=$SP_APP_ID"
+            echo "SP_OBJECT_ID=$SP_OBJECT_ID"
+            echo "SP_CERT_PATH=$PEM_PATH"
+          } >> "$GITHUB_ENV"
+
+      # ───────── Phase B: OIDC + KV ─────────
+      - name: Phase B — Azure login via OIDC -> UAMI
+        if: steps.gate.outputs.mode == 'phaseB'
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id:        ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:        ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Phase B — fetch tenant + SP identifiers from KV
+        if: steps.gate.outputs.mode == 'phaseB'
+        shell: bash
+        env:
+          KV: ${{ vars.FABRIC_SMOKE_KV_NAME }}
+        run: |
+          set -euo pipefail
+          TENANT_ID=$(az keyvault secret show --vault-name "$KV" --name "TENANT-ID"     --query value -o tsv)
+          TENANT_DOMAIN=$(az keyvault secret show --vault-name "$KV" --name "TENANT-DOMAIN" --query value -o tsv)
+          SP_APP_ID=$(az keyvault secret show --vault-name "$KV" --name "SP-APP-ID"      --query value -o tsv)
+          SP_OBJECT_ID=$(az keyvault secret show --vault-name "$KV" --name "SP-OBJECT-ID" --query value -o tsv)
+          CERT_EXPIRY=$(az keyvault secret show --vault-name "$KV" --name "CERT-EXPIRY"  --query value -o tsv)
+          echo "::add-mask::$SP_APP_ID"
+          echo "::add-mask::$SP_OBJECT_ID"
+          {
+            echo "TENANT_ID=$TENANT_ID"
+            echo "TENANT_DOMAIN=$TENANT_DOMAIN"
+            echo "SP_APP_ID=$SP_APP_ID"
+            echo "SP_OBJECT_ID=$SP_OBJECT_ID"
+            echo "CERT_EXPIRY=$CERT_EXPIRY"
+          } >> "$GITHUB_ENV"
+
+      - name: Phase B — download SP cert (PFX from KV -> PEM)
+        if: steps.gate.outputs.mode == 'phaseB'
+        shell: bash
+        env:
+          KV: ${{ vars.FABRIC_SMOKE_KV_NAME }}
+        run: |
+          set -euo pipefail
+          PFX_B64="${RUNNER_TEMP}/sp-cert.b64"
+          PFX_PATH="${RUNNER_TEMP}/sp-cert.pfx"
+          PEM_PATH="${RUNNER_TEMP}/sp-cert.pem"
+          az keyvault secret show --vault-name "$KV" --name "SP-CERT" --query value -o tsv > "$PFX_B64"
+          base64 -d "$PFX_B64" > "$PFX_PATH"
+          # PFX is exported with EMPTY password by the runbook (see docs/tenant-rotation-runbook.md
+          # Step 4); openssl `pass:` (no trailing space) matches that.
+          openssl pkcs12 -in "$PFX_PATH" -out "$PEM_PATH" -nodes -passin "pass:"
+          rm -f "$PFX_B64" "$PFX_PATH"
+          echo "SP_CERT_PATH=$PEM_PATH" >> "$GITHUB_ENV"
+
+      # ========== MCP auth (powerbi-modeling-mcp) ==========
+      - name: Export MCP-auth env for service-principal cert auth
+        # Translates existing SP cert state (SP_APP_ID + SP_CERT_PATH) into the
+        # AZURE_* env vars that @microsoft/powerbi-modeling-mcp consumes when
+        # spawned by Copilot CLI under --authmode=serviceprincipal. The tests/
+        # testFabricSkills.ps1 overlay (gated on CI_MCP_OVERLAY=true) reads these
+        # and writes them into the materialised plugins/<x>/.mcp.json before
+        # `copilot plugin install`. NONE of these are secrets: SP_APP_ID is the
+        # client/app id, AZURE_TENANT_ID is the directory id, and the cert path
+        # is a runner-temp file path. The SP cert itself lives on disk only.
+        if: steps.gate.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # AZURE_TENANT_ID must be the directory GUID. Phase B already exported
+          # TENANT_ID from KV. Phase A only exports TENANT_DOMAIN (the
+          # .onmicrosoft.com form); resolve to GUID via a transient SP login.
+          if [ -n "${TENANT_ID:-}" ]; then
+            AZURE_TENANT_ID_VAL="$TENANT_ID"
+          else
+            az login --service-principal \
+              --tenant "$TENANT_DOMAIN" \
+              --username "$SP_APP_ID" \
+              --certificate "$SP_CERT_PATH" \
+              --allow-no-subscriptions >/dev/null
+            AZURE_TENANT_ID_VAL=$(az account show --query tenantId -o tsv)
+          fi
+          {
+            echo "AZURE_CLIENT_ID=$SP_APP_ID"
+            echo "AZURE_TENANT_ID=$AZURE_TENANT_ID_VAL"
+            echo "AZURE_CLIENT_CERTIFICATE_PATH=$SP_CERT_PATH"
+            echo "CI_MCP_OVERLAY=true"
+          } >> "$GITHUB_ENV"
+          echo "MCP auth env ready (CI_MCP_OVERLAY=true): client_id=$SP_APP_ID tenant=$AZURE_TENANT_ID_VAL cert=$SP_CERT_PATH"
+
+      # ───────── Common steps ─────────
+      - name: Setup Python (for setup_test_env.py)
+        if: steps.gate.outputs.ready == 'true'
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+
+      - name: Install setup_test_env.py dependencies
+        if: steps.gate.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # pyarrow: required by generate_nyctlc_sample.py to read the parquet sample.
+          # setup_test_env.py + generate_nyctlc_sample.py use urllib (stdlib) for HTTP —
+          # `requests` is NOT a runtime dependency, so it's not installed here.
+          python -m pip install --upgrade pip
+          pip install pyarrow
+
+      - name: Setup Node (for Copilot CLI)
+        if: steps.gate.outputs.ready == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Install Copilot CLI (inline npm — enterprise allow-list deferred)
+        # NOTE: We'd prefer `mvkaran/setup-copilot-cli@<sha>` here (validates the
+        # install, exports GH_TOKEN, used by microsoft/GitHub-Copilot-for-Azure),
+        # but that action is not currently on the gim-home org allow-list and
+        # gim-home org admin is required to add it. Follow-up: gim-home/skills-for-fabric#191.
+        # Once allow-listed (or a local composite action authored), swap this two-step inline install back.
+        #
+        # npm package name is `@github/copilot` (NOT `@github/copilot-cli` — that one doesn't exist on npm).
+        # Pinned to a specific version for reproducibility; bump when needed.
+        #
+        # We deliberately do NOT pass COPILOT_GITHUB_TOKEN here — npm install + copilot --version
+        # don't require Copilot auth, and exposing the token to npm lifecycle scripts is
+        # unnecessary attack surface. The token is wired only into the smoke runner step below.
+        if: steps.gate.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g @github/copilot@1.0.50
+          # Verify install — if this fails the smoke step would hang/fail without diagnosis
+          copilot --version
+
+      - name: Install sqlcmd (go-sqlcmd, for sqldw-consumption smoke tests)
+        if: steps.gate.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # sqldw-consumption-* smoke tests call `sqlcmd` against the Fabric SQL endpoint.
+          # The windows-latest runner image doesn't ship sqlcmd; agents previously timed
+          # out trying `winget install sqlcmd`. Pre-installing here is far faster + more
+          # deterministic. go-sqlcmd is the modern AAD-aware client; supports -G for federated auth.
+          choco install sqlcmd -y --no-progress
+          # Hard-fail the step if sqlcmd isn't on PATH after install (set -e + no || true).
+          # The bash shell on windows-latest inherits choco's bin dir; pwsh inherits from
+          # the same env, so this verifies for downstream steps too.
+          which sqlcmd
+
+      - name: Build plugin (materialize skills)
+        if: steps.gate.outputs.ready == 'true'
+        shell: bash
+        run: python build/build_plugins.py
+
+      - name: Run smoke as service principal
+        if: steps.gate.outputs.ready == 'true'
+        shell: pwsh
+        env:
+          # When triggered by schedule, force full-catalog run ('all').
+          # When triggered by workflow_dispatch, honour the user's input
+          # (which itself defaults to a single sanity-check test).
+          TEST_NAMES: ${{ github.event_name == 'schedule' && 'all' || inputs.test-names }}
+          THROTTLE_LIMIT: ${{ inputs.throttle-limit || '10' }}
+          TIMEOUT_SECONDS: ${{ inputs.timeout-seconds || '900' }}
+          MODEL: ${{ inputs.model || 'claude-sonnet-4.5' }}
+          SMOKE_RESULTS_DIR: ${{ runner.temp }}/smoke-results
+          # Optional: pin smoke to a specific Fabric capacity (skips discovery + rotation).
+          # Set repo variable FABRIC_CAPACITY_ID to a capacity GUID that the CI SP has
+          # Contributor (or Admin) access to. When unset, falls back to discovery + rotation.
+          # See docs/ephemeral-tenant-smoke.md ("Pinned capacity") for the grant procedure.
+          FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
+          # Copilot CLI reads this env var first (priority over GH_TOKEN/GITHUB_TOKEN).
+          # We set both so any sub-shell spawned by the smoke runner inherits
+          # whichever priority order Copilot SDK evaluates first.
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:SMOKE_RESULTS_DIR | Out-Null
+          $tl = if ([string]::IsNullOrWhiteSpace($env:THROTTLE_LIMIT)) { 10 } else { [int]$env:THROTTLE_LIMIT }
+          $ts = if ([string]::IsNullOrWhiteSpace($env:TIMEOUT_SECONDS)) { 900 } else { [int]$env:TIMEOUT_SECONDS }
+          # Validate inputs. < 1 throttle makes the throttling loop hang forever;
+          # < 15s timeout is too short for any real test (Copilot CLI cold-start alone is ~10s).
+          if ($tl -lt 1) {
+              Write-Error "throttle-limit must be >= 1 (got '$env:THROTTLE_LIMIT'). Re-dispatch with a positive integer."
+              exit 1
+          }
+          if ($ts -lt 15) {
+              Write-Error "timeout-seconds must be >= 15 (got '$env:TIMEOUT_SECONDS'). Copilot CLI cold-start alone is ~10s. Re-dispatch with a sane value (900 default)."
+              exit 1
+          }
+          # Defensive trim — secrets/env values can pick up stray whitespace from
+          # the GH secret-set pipe path (PowerShell CRLF), and pre/post Windows
+          # newlines can sneak in. AADSTS90002 / "tenant not found" is the canonical
+          # failure mode if these aren't trimmed.
+          $tenantDomain = ($env:TENANT_DOMAIN ?? "").Trim()
+          $spAppId      = ($env:SP_APP_ID ?? "").Trim()
+          $spCertPath   = ($env:SP_CERT_PATH ?? "").Trim()
+          $spObjectId   = ($env:SP_OBJECT_ID ?? "").Trim()
+          if (-not $tenantDomain) { Write-Error "TENANT_DOMAIN env var is empty after trim"; exit 1 }
+          if (-not $spAppId)      { Write-Error "SP_APP_ID env var is empty after trim";      exit 1 }
+          if (-not $spCertPath)   { Write-Error "SP_CERT_PATH env var is empty after trim";   exit 1 }
+          if (-not $spObjectId)   { Write-Error "SP_OBJECT_ID env var is empty after trim";   exit 1 }
+          # FABRIC_CAPACITY_ID is OPTIONAL. When set, pins smoke to that capacity and
+          # skips the discovery + rotation path. Trim before validating so an empty
+          # repo-variable value (the GH UI default for an absent variable) does not
+          # produce a "no active capacity" error inside Python via an unintended
+          # --capacity-id ''. We pass the flag only when non-empty. A whitespace-only
+          # value (rare, but possible if someone fat-fingers the repo-variable UI)
+          # is treated as a misconfiguration and fails fast.
+          $capacityIdRaw = $env:FABRIC_CAPACITY_ID ?? ""
+          $capacityIdPin = $capacityIdRaw.Trim()
+          if ($capacityIdRaw -and -not $capacityIdPin) {
+              Write-Error "FABRIC_CAPACITY_ID is set but contains only whitespace. Either set a valid capacity GUID or unset the repo variable."
+              exit 1
+          }
+          # The trailing `*>&1 | Tee-Object` captures all PowerShell streams
+          # (1=success, 2=error, 3=warning, 4=verbose, 5=debug, 6=information)
+          # into the log file. We specifically need stream 6 (information)
+          # because tests/testFabricSkills.ps1 uses Write-Host to emit the
+          # per-test "=== Running test: ...", "Found skill: ...", and "Test
+          # result: Y/F/N" lines that the translator parses for telemetry
+          # enrichment. `2>&1` alone would miss those.
+          # Splat the args so the optional -capacityId can be added without
+          # introducing a duplicate invocation branch.
+          $smokeArgs = @{
+              tenant         = $tenantDomain
+              spLogin        = $spAppId
+              spCertPath     = $spCertPath
+              spObjectId     = $spObjectId
+              testName       = $env:TEST_NAMES
+              throttleLimit  = $tl
+              timeoutSeconds = $ts
+              model          = $env:MODEL
+              resultsDir     = $env:SMOKE_RESULTS_DIR
+          }
+          if ($capacityIdPin) { $smokeArgs['capacityId'] = $capacityIdPin }
+          ./tests/run-smoke-tests.ps1 @smokeArgs `
+            *>&1 | Tee-Object -FilePath "$env:SMOKE_RESULTS_DIR/smoke-run.log"
+
+      # -----------------------------------------------------------------
+      # Translate the smoke runner's flat testsResults.json into the
+      # schema-compliant tree documented in docs/skill-test-result-schema.md
+      # (per-skill area, with per-test-case subdirectories). Also emits a
+      # leadership-readable per-skill rollup markdown which is appended to
+      # the workflow's job-summary at the top (before the existing
+      # per-failure detail section).
+      # -----------------------------------------------------------------
+      - name: Translate smoke results to schema-compliant tree
+        if: always() && steps.gate.outputs.ready == 'true'
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $temp = $env:RUNNER_TEMP
+          $resultFiles = Get-ChildItem $temp -Recurse -Filter "testsResults.json" -ErrorAction SilentlyContinue |
+                         Sort-Object LastWriteTime -Descending
+          if (-not $resultFiles) {
+              Write-Host "::warning::No testsResults.json found under $temp — skipping schema translation."
+              exit 0
+          }
+          $latest = $resultFiles[0]
+          $resultsDir = $latest.Directory.FullName
+          $schemaRoot = Join-Path $temp 'smoke-results-schema'
+          $rollupPath = Join-Path $temp 'smoke-per-skill-rollup.md'
+          $runId = "${{ github.run_id }}-${{ github.run_attempt }}"
+          # Locate the streaming smoke-run.log written by the "Run smoke as
+          # service principal" step's Tee-Object. The log is written to
+          # ${env:SMOKE_RESULTS_DIR}/smoke-run.log in the previous step, but
+          # SMOKE_RESULTS_DIR is scoped to that step's env: block (per the
+          # GitHub Actions composite-action env-scoping rules). Instead of
+          # re-deriving the path, do a recursive search under RUNNER_TEMP
+          # which is guaranteed-shared across steps.
+          $smokeLogCandidates = Get-ChildItem $temp -Recurse -Filter 'smoke-run.log' -ErrorAction SilentlyContinue |
+                                Sort-Object LastWriteTime -Descending
+          $smokeLog = if ($smokeLogCandidates) { $smokeLogCandidates[0].FullName } else { $null }
+          if ($smokeLog) {
+              Write-Host "Found smoke-run.log: $smokeLog"
+          } else {
+              Write-Host "::warning::smoke-run.log not found; testResults.json will degrade to {isPass, message} only."
+          }
+          ./.github/scripts/smoke-results-to-schema.ps1 `
+              -ResultsJsonPath $latest.FullName `
+              -OutputsDir $resultsDir `
+              -TestsJsonPath './tests/tests.json' `
+              -OutputRoot $schemaRoot `
+              -RunId $runId `
+              -SummaryMarkdownPath $rollupPath `
+              -SmokeRunLogPath $smokeLog
+          # Prepend the per-skill rollup to GITHUB_STEP_SUMMARY so leadership
+          # sees the rollup at the top of the run page (before the per-failure
+          # detail emitted by the next step).
+          if (Test-Path $rollupPath) {
+              Get-Content $rollupPath -Raw | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+
+      # -----------------------------------------------------------------
+      # Per-failure summary in the workflow log itself (no artifact-download
+      # needed). Reads testsResults.json + each failed test's _output.txt.
+      # -----------------------------------------------------------------
+      - name: Summarise smoke results (per-failure detail)
+        id: summarise
+        if: always() && steps.gate.outputs.ready == 'true'
+        shell: pwsh
+        run: |
+          $temp = $env:RUNNER_TEMP
+          $resultFiles = Get-ChildItem $temp -Recurse -Filter "testsResults.json" -ErrorAction SilentlyContinue |
+                         Sort-Object LastWriteTime -Descending
+          if (-not $resultFiles) {
+              Write-Host "::warning::No testsResults.json found under $temp — smoke runner may not have completed."
+              # Emit zero outputs so workflow_call callers can still read them.
+              "total-count=0" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              "pass-count=0"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              "flaky-count=0" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              "fail-count=0"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              "failed-tests=[]" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              exit 0
+          }
+          $latest = $resultFiles[0]
+          $resultsDir = $latest.Directory.FullName
+          $results = Get-Content $latest.FullName -Raw | ConvertFrom-Json
+          $total   = @($results).Count
+          $passed  = @($results | Where-Object { $_.passed -eq 'Y' }).Count
+          $flaky   = @($results | Where-Object { $_.passed -eq 'F' }).Count
+          $failed  = @($results | Where-Object { $_.passed -notin @('Y','F') })
+          Write-Host "  Smoke summary: $passed/$total passed, $flaky flaky, $($failed.Count) failed"
+          Write-Host "  Results dir:   $resultsDir"
+          # Emit job outputs for workflow_call consumers (PR-touched orchestrator etc.).
+          "total-count=$total"        | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "pass-count=$passed"        | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "flaky-count=$flaky"        | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "fail-count=$($failed.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          # Emit failed test names as a JSON array (empty array when no failures).
+          # Consumed by fabric-smoke-pr-touched.yml's post-comment job to list
+          # which tests went red so the PR author can spot if any cover their
+          # diff and need fixing before merging. We pass JSON (not a CSV) so
+          # the consumer can parse without ambiguity even if a future test
+          # name contains a comma.
+          $failedNamesJson = if ($failed.Count -gt 0) {
+              ($failed | ForEach-Object { $_.name }) | ConvertTo-Json -Compress -AsArray
+          } else { '[]' }
+          "failed-tests=$failedNamesJson" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          # GitHub Actions step summary (shows up at the top of the run page)
+          $sumLines = @()
+          $sumLines += "## Smoke results"
+          $sumLines += ""
+          $sumLines += "| Metric | Value |"
+          $sumLines += "|---|---|"
+          $sumLines += "| Total | $total |"
+          $sumLines += "| Passed (Y) | $passed |"
+          $sumLines += "| Flaky (F)  | $flaky  |"
+          $sumLines += "| Failed (N/timeout) | $($failed.Count) |"
+          $sumLines += ""
+          if ($failed.Count -gt 0) {
+              $sumLines += "## Failed tests"
+              $sumLines += ""
+              foreach ($f in $failed) {
+                  $safeName = $f.name -replace '[^a-zA-Z0-9_-]', '_'
+                  $outPath  = Join-Path $resultsDir "${safeName}_output.txt"
+                  $tail = if (Test-Path $outPath) {
+                      (Get-Content $outPath -Tail 80) -join "`n"
+                  } else { "(no _output.txt file)" }
+                  Write-Host ""
+                  Write-Host "──────────── FAIL: $($f.name) (status=$($f.passed)) ────────────"
+                  Write-Host $tail
+                  $sumLines += "<details><summary><strong>$($f.name)</strong> &mdash; status <code>$($f.passed)</code></summary>"
+                  $sumLines += ""
+                  $sumLines += '```'
+                  $sumLines += $tail
+                  $sumLines += '```'
+                  $sumLines += "</details>"
+                  $sumLines += ""
+              }
+          }
+          $sumLines -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Detect tenant-rotation errors + auto-file issue
+        if: steps.gate.outputs.ready == 'true' && failure()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const smokeResultsDir = process.env.SMOKE_RESULTS_DIR || process.env.RUNNER_TEMP;
+            const collected = [];
+            // Scan the smoke-run.log + per-test *_output.txt under RUNNER_TEMP.
+            try {
+              const smokeLog = path.join(smokeResultsDir, 'smoke-run.log');
+              if (fs.existsSync(smokeLog)) {
+                collected.push(fs.readFileSync(smokeLog, 'utf8'));
+              }
+              const walk = (dir) => {
+                for (const name of fs.readdirSync(dir, { withFileTypes: true })) {
+                  const full = path.join(dir, name.name);
+                  if (name.isDirectory()) {
+                    walk(full);
+                  } else if (name.name.endsWith('_output.txt') || name.name === 'testsResults.json') {
+                    try { collected.push(fs.readFileSync(full, 'utf8')); } catch {}
+                  }
+                }
+              };
+              walk(process.env.RUNNER_TEMP);
+            } catch {}
+            const logSnippet = collected.join('\n---\n').slice(-4000);
+            const aadCodes = ['AADSTS50034', 'AADSTS700016', 'AADSTS900561', 'AADSTS50020'];
+            const matched = aadCodes.filter(c => logSnippet.includes(c));
+            if (matched.length === 0) {
+              core.notice('No AAD rotation codes detected; skipping rotation-issue filing.');
+              return;
+            }
+            const runUrl     = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const runbookUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/blob/main/docs/tenant-rotation-runbook.md`;
+            const title = `[chore] Fabric Shared Test Tenant: rotation detected (${matched.join(', ')})`;
+            const body  = [
+              `## Auto-filed by Fabric Smoke (Shared Test Tenant) workflow`,
+              ``,
+              `**Workflow run:** ${runUrl}`,
+              `**Tenant ID currently in env:** \`${process.env.TENANT_ID || 'unknown'}\``,
+              `**Expected expiry:** ${process.env.CERT_EXPIRY || 'unknown'}`,
+              `**AAD error code(s):** ${matched.join(', ')}`,
+              ``,
+              `## What to do`,
+              ``,
+              `Follow [docs/tenant-rotation-runbook.md](${runbookUrl}).`,
+              ``,
+              `## Log excerpt (last 4 KB)`,
+              ``,
+              '```',
+              logSnippet,
+              '```',
+            ].join('\n');
+            // listForRepo expects labels as a comma-separated string.
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              state: 'open',
+              labels: 'fabric-tenant-rotation,auto-filed',
+            });
+            // Try to assign per CODEOWNERS; if the assignee isn't a valid collaborator on the
+            // repo the API throws 422, so fall back to no assignees on retry.
+            const issueAssignees = ['mschaumberg_microsoft'];
+            const createIssue = async (assignees) => {
+              return github.rest.issues.create({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                title,
+                body,
+                labels: ['fabric-tenant-rotation', 'auto-filed', 'chore'],
+                assignees,
+              });
+            };
+            if (existing.data.length > 0) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                issue_number: existing.data[0].number,
+                title,
+                body,
+              });
+              core.notice(`Updated existing rotation issue #${existing.data[0].number}`);
+            } else {
+              try {
+                const created = await createIssue(issueAssignees);
+                core.notice(`Filed new rotation issue #${created.data.number}`);
+              } catch (err) {
+                core.warning(`Issue creation with assignees=${issueAssignees.join(',')} failed: ${err.message}. Retrying without assignees.`);
+                const created = await createIssue([]);
+                core.notice(`Filed new rotation issue #${created.data.number} (unassigned)`);
+              }
+            }
+
+      - name: Upload smoke results
+        if: always() && steps.gate.outputs.ready == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-results-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/smoke-results/**
+            ${{ runner.temp }}/**/*_output.txt
+            ${{ runner.temp }}/**/testsResults.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      # -----------------------------------------------------------------
+      # Schema-compliant artifact, consumed by the lightweight dashboard
+      # aggregator (forthcoming). Separate from the raw artifact above so
+      # the aggregator can pull just the documented schema files.
+      # -----------------------------------------------------------------
+      - name: Upload schema-compliant smoke results
+        if: always() && steps.gate.outputs.ready == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-results-schema-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/smoke-results-schema/**
+          if-no-files-found: warn
+          retention-days: 90

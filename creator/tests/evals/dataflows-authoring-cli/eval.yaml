@@ -1,0 +1,365 @@
+# Vally eval config -- migrated from tests/tests.json (skills-for-fabric)
+# Source stimuli: dataflows-authoring-create-and-refresh, dataflows-authoring-list-supported-connection-types, dataflows-authoring-preview-mashup-before-save, dataflows-authoring-update-definition
+#
+# Known gap: prompts contain {{WORKSPACE}} placeholder substituted at runtime by
+# tests/run-vally-eval.ps1. See tests/evals/README.md for local-run instructions.
+
+name: dataflows-authoring-cli-integration-eval
+description: |
+  Integration evaluation for dataflows-authoring-cli -- create-and-refresh canary, supported-connection-types lookup, executeQuery mashup preview, and updateDefinition flow.
+
+tags:
+  type: integration
+  skill: dataflows-authoring-cli
+
+environment:
+  skills:
+    - ../../../skills/dataflows-authoring-cli
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- dataflows-authoring-create-and-refresh --
+  # Source: tests/tests.json (area=dataflows)
+  # Flaky -- see https://github.com/gim-home/skills-for-fabric/issues/132
+  - name: "Create-or-update Gen2 dataflow and refresh"
+    prompt: |
+      In the {{WORKSPACE}} workspace, ensure a Dataflow Gen2 named 'eval_smoke_dataflow' exists with **exactly one shared query named 'Query1'** that returns a table with columns Name and Value. If the dataflow already exists with a different shared query name (e.g. SampleData), update its definition so the only shared query is named 'Query1' (rename or replace). Then trigger a refresh on it and poll until it completes. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: dataflows
+      flaky: "true"
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - dataflows-consumption-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - dataflows-authoring-cli
+          disallowed:
+            - dataflows-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "eval_smoke_dataflow"
+      - type: output-contains
+        config:
+          substring: "Dataflow"
+      - type: output-contains
+        config:
+          substring: "refresh"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- dataflows-authoring-list-supported-connection-types --
+  # Source: tests/tests.json (area=dataflows)
+  - name: "List supported connection types and SQL credentialType"
+    prompt: |
+      List supportedConnectionTypes for Fabric Dataflow Gen2 connections, find the SQL entry, and tell me which connectionDetails.parameters and credentialDetails.credentials.credentialType values are valid for a cloud SQL connection.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: dataflows
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - dataflows-consumption-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - dataflows-authoring-cli
+          disallowed:
+            - dataflows-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      # Semantic gate: require the answer to address the supported connection
+      # types; case-insensitive so correct prose or the literal field both pass.
+      - type: output-matches
+        config:
+          pattern: "(?i)supported\\s*connection\\s*types?"
+      - type: output-contains
+        config:
+          substring: "credentialType"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- dataflows-authoring-preview-mashup-before-save --
+  # Source: tests/tests.json (area=dataflows)
+  # Prompt also asks the agent to detect per-cell errors that serialize as
+  # null in the Arrow output (see m-language.md).
+  - name: "executeQuery preview before updateDefinition"
+    prompt: |
+      I'm authoring a Power Query M change to my Dataflow Gen2 in the {{WORKSPACE}} workspace. Before I call updateDefinition, I want to preview the candidate customMashupDocument against the bound connections to make sure the M evaluates correctly. Walk me through the executeQuery preview step and what to inspect in the response before I save -- including how to detect per-cell errors that serialize as null in the Arrow output. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: dataflows
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - dataflows-consumption-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - dataflows-authoring-cli
+          disallowed:
+            - dataflows-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "executeQuery"
+      - type: output-contains
+        config:
+          substring: "customMashupDocument"
+      - type: output-contains
+        config:
+          substring: "updateDefinition"
+      # Per-cell-error DETECTION gate (required): the answer must prove it can
+      # detect errored cells (which serialize as Arrow null), not just recover.
+      # Accepts the try-record field [HasError] or a try cell-probe
+      # (try <step>{N}[col]); recovery functions alone do not satisfy it.
+      - type: output-matches
+        config:
+          pattern: "\\[HasError\\]|try\\s+[^\\n]{0,40}?\\{\\s*\\d+\\s*\\}\\s*\\[\\w"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- dataflows-authoring-update-definition --
+  # Source: tests/tests.json (area=dataflows)
+  - name: "updateDefinition adds Doubled shared query"
+    prompt: |
+      In the {{WORKSPACE}} workspace, take the existing Dataflow Gen2 named 'SkillsTestDataflow', decode its current Power Query M, add a new shared query named 'Doubled' that returns a table with a single column 'n' containing the values 2, 4, 6, and persist the change via updateDefinition. Do not trigger a refresh. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: dataflows
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - dataflows-consumption-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - dataflows-authoring-cli
+          disallowed:
+            - dataflows-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "updateDefinition"
+      - type: output-contains
+        config:
+          substring: "Doubled"
+      - type: output-contains
+        config:
+          substring: "shared"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- dataflows-authoring-output-destination-lakehouse --
+  # Source: tests/tests.json (area=dataflows)
+  # TODO(<team>): calibrate constraints over first 1-2 weeks; pilot defaults inherited from eventhouse-authoring-cli
+  - name: "Configure Dataflow Gen2 output destination to lakehouse"
+    prompt: |
+      In the {{WORKSPACE}} workspace, create a Dataflow Gen2 named 'eval_od_smoke' with a source query named 'ODTest' that produces a 2-row typed table with columns City (text) and Pop (text). Configure it with an output destination writing to a Lakehouse table in the LSEGDemo lakehouse. Use the DataDestinations annotation with IsNewTarget=true and Automatic settings. Include a hidden _DataDestination query with null-safe navigation and set loadEnabled=false on it. Trigger a refresh with ApplyChangesIfNeeded and poll until it completes. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: dataflows
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - dataflows-consumption-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - dataflows-authoring-cli
+          disallowed:
+            - dataflows-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          pattern: "(?i)ApplyChangesIfNeeded"
+      # Content-specific token the agent only emits when it actually authors
+      # the destination M (replaces the ambiguous "Completed" match).
+      - type: output-contains
+        config:
+          substring: "Lakehouse.Contents"
+      - type: output-contains
+        config:
+          substring: "eval_od_smoke"
+      - type: output-contains
+        config:
+          substring: "DataDestination"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- dataflows-authoring-output-destination-warehouse --
+  # Source: tests/tests.json (area=dataflows)
+  # TODO(<team>): calibrate constraints over first 1-2 weeks; pilot defaults inherited from eventhouse-authoring-cli
+  - name: "Configure Dataflow Gen2 output destination to warehouse"
+    prompt: |
+      In the {{WORKSPACE}} workspace, create a Dataflow Gen2 named 'eval_od_wh_smoke' with a source query producing a typed 2-row table with columns Item (text) and Qty (text). Configure an output destination to the Warehouse in the same workspace (schema dbo) using Fabric.Warehouse connector with warehouseId-based GUID navigation. Use IsNewTarget=true, Automatic settings, and loadEnabled=false on the destination query. Refresh with ApplyChangesIfNeeded and poll until complete. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: dataflows
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - dataflows-consumption-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - dataflows-authoring-cli
+          disallowed:
+            - dataflows-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          pattern: "(?i)\\bWarehouse\\b"
+      - type: output-matches
+        config:
+          pattern: "(?i)ApplyChangesIfNeeded"
+      # Content-specific token the agent only emits when it actually authors
+      # the destination binding (replaces the ambiguous "Completed" match).
+      - type: output-contains
+        config:
+          substring: "queryMetadata"
+      - type: output-contains
+        config:
+          substring: "eval_od_wh_smoke"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50

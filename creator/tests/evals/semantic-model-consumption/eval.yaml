@@ -1,0 +1,82 @@
+# Vally eval config -- migrated from tests/tests.json (skills-for-fabric)
+# Source stimulus: semantic-model-consumption-basic
+#
+# Known gap: prompts contain {{WORKSPACE}} placeholder substituted at runtime by
+# tests/run-vally-eval.ps1. See tests/evals/README.md for local-run instructions.
+
+name: semantic-model-consumption-integration-eval
+description: |
+  Integration evaluation for semantic-model-consumption -- verifies semantic model
+  discovery, metadata inspection, and DAX query execution.
+
+tags:
+  type: integration
+  skill: semantic-model-consumption
+
+environment:
+  skills:
+    - ../../../skills/semantic-model-consumption
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- semantic-model-consumption-basic --
+  # Source: tests/tests.json (area=powerbi). The prompt + expected result
+  # match the legacy smoke version exactly so workload-team intent is
+  # preserved as the canonical consumption coverage. (A previous
+  # NYC-Taxi-fare-average variant was retired in favor of this one to
+  # stay aligned with smoke.)
+  - name: "Run DAX TotalSales2023 against SalesBenchmark semantic model"
+    prompt: |
+      Run a DAX query against the SalesBenchmark semantic model. Execute: EVALUATE ROW("TotalSales2023", CALCULATE([Sales], 'date'[Year] = 2023)). Show me the result.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: powerbi
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - sqldw-consumption-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - semantic-model-consumption
+          disallowed:
+            - sqldw-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      # expectedResults parity with smoke
+      - type: output-matches
+        config:
+          pattern: "(?i)ExecuteQuery"
+      - type: output-contains
+        config:
+          substring: "363,742,767"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50

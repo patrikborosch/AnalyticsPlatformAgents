@@ -1,0 +1,745 @@
+name: Fabric Smoke (PR-touched)
+
+# !!! BREAK-GLASS ENTRY-POINT ONLY -- VALLY IS THE PRIMARY HARNESS !!!
+# After the Vally cutover (PR #322), this workflow is dispatch-only
+# (`workflow_dispatch:`). Auto-fire on PRs (`pull_request_target`) and the
+# schedule trigger were removed; Vally now gates every PR and runs nightly.
+#
+# WHY workflow_dispatch IS KEPT (and why dispatching it is still niche):
+#   - Preserves a single button to re-run the legacy PR-touched smoke when
+#     a Vally false-negative is suspected during a workload-team rollout.
+#   - Anchors the workflow on disk so a `git revert` of the cutover PR
+#     cleanly restores the pre-cutover auto-fire behavior (re-add
+#     `pull_request_target` to the `on:` block to revive auto-routing).
+#
+# WHAT TO EXPECT WHEN YOU DISPATCH IT MANUALLY:
+#   Steps below reference `github.event.pull_request.*`. On a manual
+#   dispatch those expressions evaluate to `null`, so:
+#     - the `detect` job's draft-guard `if` short-circuits and skips
+#     - `PR_NUMBER` is blank, making the resulting GitHub API call malformed
+#   In short: the workflow will start, mark steps as skipped, and produce no
+#   useful smoke results. Use the runnable break-glass instead.
+#
+# RUNNABLE BREAK-GLASS PATH (PREFERRED):
+#   - `fabric-smoke-ephemeral.yml` -- accepts manual inputs (PR number,
+#     test selector) and runs against an ephemeral workspace.
+#   - See `docs/legacy-smoke-break-glass.md` for the full runbook.
+#
+# Original design notes (kept for archaeology; some sections describe the
+# pre-cutover auto-fire model that no longer runs):
+#
+# Per-PR gate. When a PR touches skills/, common/, or plugins/, detect which
+# skills changed, map them to smoke tests via tests/tests.json, and run ONLY
+# those tests through the existing smoke pipeline (via workflow_call into
+# fabric-smoke-ephemeral.yml).
+#
+# Much faster than the full-catalog nightly (~5-15 min vs ~1h) and gives PR
+# authors fast feedback before merge. Nightly continues to cover everything.
+#
+# Mapping rules (in order):
+#   1. test.name starts with touched-skill-name
+#   2. touched skill appears in test.expectedSkills
+# If no tests match the touched skills, falls back to a single sanity test.
+#
+# Trigger model: pull_request_target (NOT pull_request) so that PRs from
+# forks -- including personal forks owned by Microsoft workload-team members
+# who do not have write access on gim-home/skills-for-fabric -- get access
+# to repo secrets and pull-requests: write. The workflow file is loaded from
+# the BASE branch (main), so PR contents cannot change CI logic. PR HEAD code
+# is checked out by the called smoke workflow via the `checkout-ref` input,
+# pinned to head.sha (not head.ref) to defend against TOCTOU race-swap.
+#
+# Authorization model: GitHub-native fork-PR approval. The repo's
+# Settings > Actions > General > "Fork pull request workflows" enforces
+# "Require approval for fork pull request workflows" (controlled by the
+# enterprise/org policy, not toggleable per-repo). With that policy:
+#
+#   "Fork pull requests from users without write access will require
+#    approval to run workflows."
+#
+# Every fork PR from a non-write-access contributor (workload teams,
+# external contributors) thus gets a yellow banner -- "Workflows awaiting
+# approval from maintainer" -- with a native "Approve and run workflows"
+# button. Approval is required FRESH on each `synchronize` event (each
+# push), not just the first time.
+#
+# Non-fork PRs (i.e. branches pushed directly to gim-home/skills-for-fabric
+# by contributors who already have write access on the repo) run
+# automatically -- the push itself was already gated by write permission.
+#
+# This matches how Skill PR Validation gates fork PRs today. We deliberately
+# do NOT add a custom per-PR or per-push authorize layer on top -- it would
+# duplicate the native gate.
+#
+# If the enterprise/org policy is ever loosened (e.g. to "Require approval
+# for first-time contributors only" or "No approval required"), revisit
+# this design -- repeat external contributors would then run with secrets
+# without per-PR review.
+#
+# Threats this design accepts:
+#   - Repeat trusted contributors (with write access) going rogue
+#     mid-stream: out of scope per the internal-trust model (gim-home
+#     contributors are Microsoft employees; review process catches
+#     deliberate harm).
+#   - Modified test runner faking results: closed by the "Restore test
+#     infrastructure from default branch" step in the called workflow
+#     (introduced in PR #209).
+#   - tests.json prompt content from PR HEAD: accepted per internal-trust
+#     (Avi review on PR #209).
+#
+# Concurrency: shares the fabric-smoke-shared-tenant group with the scheduled
+# smoke workflow (handled by the called workflow). Full-eval now runs in its
+# own `fabric-full-eval-shared-tenant` lane and no longer queues against
+# smoke. Within a single PR, a new push cancels any in-progress PR-touched run.
+
+on:
+  workflow_dispatch: {} # Manual-only after Vally cutover; do not add PR/schedule triggers.
+
+permissions:
+  id-token: write         # required for Phase B OIDC by the called workflow
+  contents: read
+  issues: write           # required for tenant-rotation auto-issue in the called workflow
+  pull-requests: write    # required for posting the result comment on the PR
+
+# Two-level concurrency:
+#   - per-PR sub-group via the workflow name so a new push to the SAME PR cancels the
+#     previous PR-touched run (no point grading stale code).
+#   - the called workflow (fabric-smoke-ephemeral.yml) maintains its OWN per-PR
+#     concurrency group, sized by the `caller-pr-number` and `caller-event-name`
+#     inputs we pass below. That isolation also keeps schedule and
+#     workflow_dispatch in separate slots so PR traffic cannot starve the
+#     nightly schedule. Full-eval is in a separate
+#     `fabric-full-eval-shared-tenant` lane and does not compete with smoke
+#     for the same queue.
+# GH Actions doesn't natively support two groups; pick the per-PR group here and rely
+# on the called workflow's group to handle cross-workflow contention.
+concurrency:
+  group: fabric-smoke-pr-touched-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # -----------------------------------------------------------------
+  # detect-touched-skills: read the PR's changed files, extract distinct
+  # skill names from skills/<name>/ paths, map to test names via tests.json.
+  # Reads the PR head's tests.json (not main's) so a PR that ALSO updates
+  # tests.json gets evaluated against its own additions.
+  # -----------------------------------------------------------------
+  detect:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    outputs:
+      test-names: ${{ steps.detect.outputs.test-names }}
+      # Human-readable composite (may include parenthesised suffixes like
+      # "(infrastructure: ...)" or "+ (tests.json: ...)"). Used for display
+      # only -- DO NOT split on commas, those commas may live inside the
+      # suffix. Use `touched-skill-names` for state/diff.
+      touched-skills: ${{ steps.detect.outputs.touched-skills }}
+      # Clean kebab-case CSV of skill folder names (or empty). Safe to
+      # split on commas. Used for `state.touchedSkills` diff and persistence.
+      touched-skill-names: ${{ steps.detect.outputs.touched-skill-names }}
+      touched-count: ${{ steps.detect.outputs.touched-count }}
+      matched-test-count: ${{ steps.detect.outputs.matched-test-count }}
+    steps:
+      # Pin to head.sha (not head.ref) to defend against TOCTOU race-swap:
+      # head.ref can change between the gate decision and this checkout,
+      # head.sha cannot.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Detect touched skills from PR
+        id: detect
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # List files changed in the PR via the GitHub REST API with explicit
+          # pagination. `gh pr view --json files` is NOT paginated and silently
+          # truncates at ~100 files, which would miss touched skills on large
+          # changesets. The REST endpoint `/repos/{owner}/{repo}/pulls/{n}/files`
+          # supports --paginate to enumerate all pages.
+          files=$(gh api --paginate "/repos/${{ github.repository }}/pulls/$PR_NUMBER/files" --jq '.[].filename')
+          file_count=$(echo "$files" | grep -c . || true)
+          echo "Changed files ($file_count):"
+          echo "$files" | sed 's/^/  /'
+
+          # Infrastructure-file detection: changes to common/ or any per-plugin
+          # manifest (plugins/<X>/.github/plugin/plugin.json) could affect any
+          # skill's plugin membership, so re-run the full catalog. Per-plugin
+          # CONTENT changes (plugins/<X>/skills/...) are handled below with
+          # plugin-scoped expansion.
+          # NOTE: tests/tests.json is NOT in this set anymore. A PR that modifies
+          # tests.json only changes specific test entries; we run ONLY those
+          # entries below (plus skill-derived tests if any skill folders were also
+          # touched). Earlier we treated tests.json as infra, but that ran all 48
+          # tests on every prompt tweak -- noisy PR comments and wasted tenant
+          # capacity for no signal. The targeted approach matches test scope to
+          # change scope.
+          #
+          # `|| true` is intentional: grep exits 1 when no match (which is the
+          # happy path here, not an error). Without it `set -e` would abort.
+          infra_touched=$(echo "$files" | grep -E '^(common/|plugins/[^/]+/\.github/plugin/plugin\.json$)' | head -1 || true)
+          if [ -n "$infra_touched" ]; then
+            echo "Infrastructure file touched ($infra_touched). Running full catalog."
+            echo "test-names=all" >> "$GITHUB_OUTPUT"
+            echo "touched-skills=(infrastructure: $(echo "$files" | grep -E '^(common/|plugins/[^/]+/\.github/plugin/plugin\.json$)' | paste -sd, -))" >> "$GITHUB_OUTPUT"
+            # No specific skill folder touched in infra-only mode; clean output stays empty.
+            echo "touched-skill-names=" >> "$GITHUB_OUTPUT"
+            echo "touched-count=infra" >> "$GITHUB_OUTPUT"
+            echo "matched-test-count=all" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Per-plugin touch detection. plugins/<X>/plugin.json or
+          # plugins/<X>/skills/** changes should expand to the smoke tests
+          # that exercise plugin X's skills, not the full catalog. The
+          # expansion rule is union of:
+          #   (a) tests pinned to plugin X via the optional `plugin` field
+          #   (b) tests whose expectedSkills are a subset of plugin X's skills
+          #       (read directly from each per-plugin manifest at
+          #       plugins/<name>/.github/plugin/plugin.json -- the same source
+          #       of truth that build/build_plugins.py uses)
+          # If the per-plugin manifest discovery yields no entries (e.g. the PR
+          # somehow ships an empty plugins/ tree), fall back to the full
+          # catalog as the safe default.
+          # The trailing or-true on this grep is intentional: grep exits 1 on
+          # no match, which is the happy path here (no plugins touched -> fall
+          # through to skill logic below). Without it, `set -e` would abort the
+          # step. Same idiom is used by the infra_touched grep above and by the
+          # touched/tests_json_touched/count tallies further down in this step.
+          touched_plugins=$(echo "$files" | grep -E '^plugins/[^/]+/' | sed -E 's|^plugins/([^/]+)/.*|\1|' | sort -u || true)
+          plugin_expanded_tests=""
+          if [ -n "$touched_plugins" ]; then
+            # PR-controlled folder names are passed via env var (NOT shell-
+            # interpolated into the Python source) so a malicious plugin folder
+            # name can't break out of a string literal and execute under this
+            # workflow's pull_request_target permissions. Helper imports from
+            # PR HEAD are likewise avoided -- the helper logic in
+            # build/plugin_index.py is intentionally duplicated inline here.
+            plugin_expanded_tests=$(TOUCHED_PLUGINS="$touched_plugins" python -c "
+          import os, glob, json
+          raw = os.environ.get('TOUCHED_PLUGINS', '')
+          touched_folders = [p.strip() for p in raw.replace('\n', ',').split(',') if p.strip()]
+          # index is keyed by FOLDER name (matches what we glob from paths above);
+          # each entry carries the manifest's NAME field (which the `plugin:` field
+          # in tests/tests.json uses) plus the skill list. This preserves correct
+          # matching even if a future plugin folder ever diverges from its manifest
+          # name -- build/plugin_index.py has the same defensive design.
+          index = {}
+          for manifest_path in sorted(glob.glob('plugins/*/.github/plugin/plugin.json')):
+              folder = manifest_path.split('/')[1]
+              try:
+                  with open(manifest_path, encoding='utf-8') as f:
+                      m = json.load(f)
+              except (OSError, json.JSONDecodeError):
+                  continue
+              name = m.get('name')
+              if not isinstance(name, str) or not name:
+                  continue
+              skills = []
+              for s in m.get('skills', []):
+                  if not isinstance(s, str):
+                      continue
+                  v = s.strip()
+                  if v.startswith('./'):
+                      v = v[2:]
+                  if v.startswith('skills/'):
+                      v = v[len('skills/'):]
+                  skills.append(v)
+              index[folder] = {'name': name, 'skills': skills}
+          if not index:
+              # Safe default: per-plugin manifest discovery yielded nothing.
+              # Print sentinel that the shell wrapper detects and switches
+              # to full-catalog mode below.
+              print('__PLUGIN_INDEX_EMPTY__')
+          else:
+              tests = json.load(open('tests/tests.json'))
+              matched = []
+              for folder in touched_folders:
+                  entry = index.get(folder)
+                  if entry is None:
+                      continue
+                  plugin_name = entry['name']
+                  plugin_skills = set(entry['skills'])
+                  for t in tests:
+                      name = t.get('name', '')
+                      raw = t.get('plugin')
+                      if isinstance(raw, str):
+                          pins = [raw]
+                      elif isinstance(raw, list):
+                          pins = [v for v in raw if isinstance(v, str)]
+                      else:
+                          pins = []
+                      expected = t.get('expectedSkills', []) or []
+                      if plugin_name in pins or (expected and set(expected).issubset(plugin_skills)):
+                          matched.append(name)
+              seen = set(); unique = []
+              for n in matched:
+                  if n not in seen:
+                      seen.add(n); unique.append(n)
+              print(','.join(unique))
+          ")
+            if [ "$plugin_expanded_tests" = "__PLUGIN_INDEX_EMPTY__" ]; then
+              echo "Per-plugin touched but per-plugin manifest discovery yielded no entries."
+              echo "Falling back to full catalog (safe default)."
+              echo "test-names=all" >> "$GITHUB_OUTPUT"
+              touched_plugins_csv=$(echo "$touched_plugins" | paste -sd, -)
+              echo "touched-skills=(plugins: $touched_plugins_csv -- index empty)" >> "$GITHUB_OUTPUT"
+              echo "touched-count=infra" >> "$GITHUB_OUTPUT"
+              echo "matched-test-count=all" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Plugin expansion (${touched_plugins} -> ${plugin_expanded_tests:-(none)})"
+          fi
+
+          # Extract distinct skill names from skills/<name>/ paths.
+          # `|| true` is intentional: grep exits 1 when no match (legal here,
+          # falls through to the empty-touched path below).
+          touched=$(echo "$files" | grep -E '^skills/[^/]+/' | sed -E 's|^skills/([^/]+)/.*|\1|' | sort -u || true)
+          # Compute the clean CSV and count EARLY so the tests.json failure
+          # fallbacks below can still emit `touched-skill-names=$touched_csv`
+          # for PRs that touched both skill folders AND tests.json.
+          touched_csv=$(echo "$touched" | paste -sd, -)
+          touched_count=$(echo "$touched" | grep -c . || true)
+
+          # Detect whether tests/tests.json itself changed. If so, compute the
+          # CHANGED test entries (added or modified) via the helper script,
+          # which JSON-diffs the PR HEAD's tests.json against main's.
+          # On any parse error from the helper, fall back to running all tests
+          # (the prior behavior) so we never silently lose coverage.
+          tests_json_touched=$(echo "$files" | grep -E '^tests/tests\.json$' | head -1 || true)
+          json_changed_tests=""
+          if [ -n "$tests_json_touched" ]; then
+            base_json="${RUNNER_TEMP}/tests-base.json"
+            git_show_err="${RUNNER_TEMP}/git-show-err.log"
+            # The detect job's checkout above used default fetch-depth=1, so
+            # `origin/${base.ref}` may not yet be in the local object store.
+            # Fetch it explicitly (shallow) before trying `git show`. Capture
+            # stderr to a tempfile rather than `2>/dev/null` so failures are
+            # diagnosable in the workflow log.
+            base_ref="${{ github.event.pull_request.base.ref }}"
+            if ! git fetch origin "${base_ref}:refs/remotes/origin/${base_ref}" \
+                --depth=1 --no-tags 2> "$git_show_err"; then
+              echo "WARNING: git fetch of base ref failed. stderr was:"
+              sed 's/^/  /' "$git_show_err" || true
+              echo "Falling back to full catalog (safe default)."
+              echo "test-names=all" >> "$GITHUB_OUTPUT"
+              echo "touched-skills=(infrastructure: tests/tests.json -- base fetch failed)" >> "$GITHUB_OUTPUT"
+              # Preserve any real skill folders touched (PR may have changed
+              # both skills/ AND tests.json -- only the tests.json diff failed).
+              echo "touched-skill-names=${touched_csv}" >> "$GITHUB_OUTPUT"
+              echo "touched-count=infra" >> "$GITHUB_OUTPUT"
+              echo "matched-test-count=all" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if git show "origin/${base_ref}:tests/tests.json" > "$base_json" 2> "$git_show_err"; then
+              # Security: run the helper script from the TRUSTED base branch, not
+              # the PR HEAD, since pull_request_target has write permissions.
+              trusted_helper=$(mktemp)
+              if ! git show "origin/${base_ref}:.github/scripts/diff_changed_test_names.py" > "$trusted_helper" 2> "$git_show_err"; then
+                # Helper doesn't exist in base branch (new file in this PR) -- skip
+                echo "diff_changed_test_names.py not in base branch; skipping tests.json diff."
+                json_changed_tests=""
+              elif json_changed_tests=$(python "$trusted_helper" \
+                  --base "$base_json" \
+                  --head tests/tests.json); then
+                echo "tests.json changed entries: ${json_changed_tests:-(none)}"
+              else
+                echo "WARNING: diff_changed_test_names.py exited non-zero; falling back to full catalog."
+                echo "test-names=all" >> "$GITHUB_OUTPUT"
+                echo "touched-skills=(infrastructure: tests/tests.json -- diff failed)" >> "$GITHUB_OUTPUT"
+                # Preserve any real skill folders touched.
+                echo "touched-skill-names=${touched_csv}" >> "$GITHUB_OUTPUT"
+                echo "touched-count=infra" >> "$GITHUB_OUTPUT"
+                echo "matched-test-count=all" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            else
+              echo "WARNING: git show of base tests.json failed. stderr was:"
+              sed 's/^/  /' "$git_show_err" || true
+              echo "Falling back to full catalog (safe default)."
+              echo "test-names=all" >> "$GITHUB_OUTPUT"
+              echo "touched-skills=(infrastructure: tests/tests.json -- base unavailable)" >> "$GITHUB_OUTPUT"
+              # Preserve any real skill folders touched.
+              echo "touched-skill-names=${touched_csv}" >> "$GITHUB_OUTPUT"
+              echo "touched-count=infra" >> "$GITHUB_OUTPUT"
+              echo "matched-test-count=all" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          # No skills AND no tests.json changes AND no plugin-expanded tests
+          # (the on.paths filter shouldn't let this case through, but
+          # defensively handle it): sanity test only.
+          if [ -z "$touched" ] && [ -z "$json_changed_tests" ] && [ -z "$plugin_expanded_tests" ]; then
+            echo "No skill paths, tests.json or plugin changes resolved tests. Running single sanity test."
+            echo "test-names=dataflows-consumption-list-and-inspect" >> "$GITHUB_OUTPUT"
+            echo "touched-skills=" >> "$GITHUB_OUTPUT"
+            echo "touched-skill-names=" >> "$GITHUB_OUTPUT"
+            echo "touched-count=0" >> "$GITHUB_OUTPUT"
+            echo "matched-test-count=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -n "$touched" ]; then
+            echo "Touched skills ($touched_count): $touched_csv"
+          fi
+
+          # Map touched skills to test names via tests/tests.json.
+          # Rule: test.name starts with skill OR skill in test.expectedSkills.
+          # Empty $touched_csv produces no skill-derived matches (the python
+          # block below handles the empty-list case cleanly).
+          matched_from_skills=$(python -c "
+          import json, sys
+          raw = '$touched_csv'
+          touched = [s for s in raw.split(',') if s] if raw else []
+          tests = json.load(open('tests/tests.json'))
+          matched = []
+          for t in tests:
+              name = t.get('name', '')
+              expected = t.get('expectedSkills', []) or []
+              for skill in touched:
+                  if name.startswith(skill) or skill in expected:
+                      matched.append(name)
+                      break
+          # de-dup preserving order
+          seen = set()
+          unique = []
+          for n in matched:
+              if n not in seen:
+                  seen.add(n)
+                  unique.append(n)
+          print(','.join(unique))
+          ")
+
+          # Union skill-derived tests with tests.json-changed entries AND with
+          # plugin-expanded tests (from per-plugin touch detection above).
+          # Any set may be empty; the union is empty only when all three are.
+          # De-dup preserving order: skill-derived, then tests.json-only, then
+          # plugin-expanded tail.
+          matched=$(python -c "
+          skill_csv = '$matched_from_skills'
+          json_csv = '$json_changed_tests'
+          plugin_csv = '$plugin_expanded_tests'
+          skill_set = [n for n in skill_csv.split(',') if n] if skill_csv else []
+          json_set = [n for n in json_csv.split(',') if n] if json_csv else []
+          plugin_set = [n for n in plugin_csv.split(',') if n] if plugin_csv else []
+          seen = set()
+          unique = []
+          for n in skill_set + json_set + plugin_set:
+              if n not in seen:
+                  seen.add(n)
+                  unique.append(n)
+          print(','.join(unique))
+          ")
+
+          if [ -z "$matched" ]; then
+            echo "Neither touched skills nor tests.json changes mapped to any tests. Running single sanity test."
+            echo "test-names=dataflows-consumption-list-and-inspect" >> "$GITHUB_OUTPUT"
+            echo "touched-skills=$touched_csv" >> "$GITHUB_OUTPUT"
+            echo "touched-skill-names=$touched_csv" >> "$GITHUB_OUTPUT"
+            echo "touched-count=$touched_count" >> "$GITHUB_OUTPUT"
+            echo "matched-test-count=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          matched_count=$(echo "$matched" | tr ',' '\n' | grep -c . || true)
+          echo "Matched tests ($matched_count): $matched"
+          echo "test-names=$matched" >> "$GITHUB_OUTPUT"
+          # Composite touched-skills string. Concatenates skill folders, plugin
+          # touches, and tests.json-only touches into a single human-readable
+          # display string the PR comment surfaces. `touched-skill-names` stays
+          # a clean kebab-case CSV (or empty) so the post-comment helper can
+          # split on commas safely.
+          touched_plugins_csv=""
+          if [ -n "$touched_plugins" ]; then
+            touched_plugins_csv=$(echo "$touched_plugins" | paste -sd, -)
+          fi
+          summary=""
+          if [ -n "$touched" ]; then
+            summary="$touched_csv"
+          fi
+          if [ -n "$json_changed_tests" ]; then
+            if [ -n "$summary" ]; then summary="$summary + "; fi
+            summary="${summary}(tests.json: $json_changed_tests)"
+          fi
+          if [ -n "$touched_plugins_csv" ]; then
+            if [ -n "$summary" ]; then summary="$summary + "; fi
+            summary="${summary}(plugins: $touched_plugins_csv)"
+          fi
+          echo "touched-skills=$summary" >> "$GITHUB_OUTPUT"
+          echo "touched-skill-names=$touched_csv" >> "$GITHUB_OUTPUT"
+          echo "touched-count=$touched_count" >> "$GITHUB_OUTPUT"
+          echo "matched-test-count=$matched_count" >> "$GITHUB_OUTPUT"
+
+      - name: Add detection summary to job log
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## PR-touched smoke detection"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Touched skills | ${{ steps.detect.outputs.touched-count }} |"
+            echo "| Matched tests | ${{ steps.detect.outputs.matched-test-count }} |"
+            echo "| Detection reason | \`${{ steps.detect.outputs.touched-skills }}\` |"
+            echo "| Skill folders touched | \`${{ steps.detect.outputs.touched-skill-names }}\` |"
+            echo "| Tests to run | \`${{ steps.detect.outputs.test-names }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # -----------------------------------------------------------------
+  # smoke: invokes the existing fabric-smoke-ephemeral.yml via workflow_call
+  # with the test names computed by `detect`. Inherits all repo secrets so the
+  # called workflow's auth gate (Phase A direct secrets, Phase B OIDC + KV)
+  # works the same as for scheduled / dispatch runs.
+  # -----------------------------------------------------------------
+  smoke:
+    needs: detect
+    uses: ./.github/workflows/fabric-smoke-ephemeral.yml
+    with:
+      test-names: ${{ needs.detect.outputs.test-names }}
+      throttle-limit: '10'
+      timeout-seconds: '900'
+      model: 'claude-sonnet-4.5'
+      # CRITICAL: pin smoke to the PR HEAD commit so tests exercise the PR's
+      # modified skill files, not main's. Pinning to SHA (not ref) prevents
+      # TOCTOU race-swap by a force-push between event dispatch and run.
+      checkout-ref: ${{ github.event.pull_request.head.sha }}
+      # Pass PR identity explicitly to the called workflow's concurrency
+      # group. Avoids depending on github-context inheritance through
+      # workflow_call: even though GitHub documents that github.event_name
+      # and github.event.pull_request.number propagate to the called
+      # workflow, declaring them as explicit inputs makes the contract
+      # self-documenting and defends against future context-inheritance
+      # changes.
+      caller-pr-number: ${{ github.event.pull_request.number }}
+      caller-event-name: ${{ github.event_name }}
+    secrets: inherit
+
+  # -----------------------------------------------------------------
+  # post-result-comment: read the smoke job's outputs and post (or update)
+  # the comment(s) on the PR.
+  #
+  # Two comment kinds:
+  #   - Sticky (one per PR, marker <!-- fabric-smoke-pr-touched -->): always
+  #     updated in place with the latest run. State diff embedded as JSON.
+  #   - Transition (append-only, marker
+  #     <!-- fabric-smoke-pr-touched-transition -->): posted at the bottom
+  #     ONLY when the failed-test set or auth-gate state changes. Flaky-only
+  #     deltas, same-state no-ops, and legacy-format sticky migrations stay
+  #     silent.
+  #
+  # Logic lives in .github/scripts/smoke-pr-comment.js so it can be unit-
+  # tested (tests/test_smoke_pr_comment.js).
+  # -----------------------------------------------------------------
+  post-comment:
+    needs: [detect, smoke]
+    runs-on: ubuntu-latest
+    if: always() && needs.detect.result == 'success'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # Checkout base branch so the post-comment step can require()
+      # .github/scripts/smoke-pr-comment.js. pull_request_target defaults
+      # to the base ref, never PR HEAD -- safe.
+      - name: Checkout base for helper script
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: |
+            .github/scripts/smoke-pr-comment.js
+          sparse-checkout-cone-mode: false
+
+      - name: Post or update PR comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Human-readable composite (may contain commas inside parens like
+          # "(tests.json: a,b)"). Used for display ONLY -- never split on commas.
+          TOUCHED_SKILLS: ${{ needs.detect.outputs.touched-skills }}
+          # Clean kebab-case CSV (or empty). Safe to split on commas. Used for
+          # state.touchedSkills (diff/persistence).
+          TOUCHED_SKILL_NAMES: ${{ needs.detect.outputs.touched-skill-names }}
+          TEST_NAMES: ${{ needs.detect.outputs.test-names }}
+          # Upstream count from the detect job. May be 'all' (the
+          # full-catalog sentinel, used in infra-touch / tests.json-parse
+          # failure paths) or a numeric string. Passed through to the
+          # sticky so it can show "Matched tests (all): entire catalog"
+          # instead of the misleading "Matched tests (1): `all`" that
+          # would otherwise result from splitting TEST_NAMES on commas.
+          MATCHED_TEST_COUNT: ${{ needs.detect.outputs.matched-test-count }}
+          SMOKE_RESULT: ${{ needs.smoke.result }}
+          AUTH_READY: ${{ needs.smoke.outputs.auth-ready }}
+          AUTH_MODE: ${{ needs.smoke.outputs.auth-mode }}
+          TOTAL_COUNT: ${{ needs.smoke.outputs.total-count }}
+          PASS_COUNT: ${{ needs.smoke.outputs.pass-count }}
+          FLAKY_COUNT: ${{ needs.smoke.outputs.flaky-count }}
+          FAIL_COUNT: ${{ needs.smoke.outputs.fail-count }}
+          FAILED_TESTS: ${{ needs.smoke.outputs.failed-tests }}
+        with:
+          script: |
+            const path = require('path');
+            const {
+              STICKY_MARKER,
+              TRANSITION_MARKER,
+              buildStickyBody,
+              parseStickyState,
+              diffStates,
+              shouldPostTransition,
+              buildTransitionBody,
+            } = require(path.resolve(process.env.GITHUB_WORKSPACE, '.github', 'scripts', 'smoke-pr-comment.js'));
+
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+            const headSha = process.env.HEAD_SHA || '';
+            const shortSha = headSha ? headSha.slice(0, 7) : '';
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            // Parse touched skills + matched tests + failed tests from env
+            // into arrays.
+            //
+            // TOUCHED_SKILL_NAMES is a clean kebab-case CSV (or empty) emitted
+            // by the detect job specifically for state diff/persistence. It is
+            // safe to split on commas.
+            //
+            // TOUCHED_SKILLS is the human-readable composite used purely for
+            // the "Detection reason" display line. It may contain commas inside
+            // parenthesised suffixes like "(tests.json: a,b)" and MUST NOT be
+            // split on commas.
+            //
+            // The smoke job emits failed-tests as a JSON array.
+            const cleanRaw = process.env.TOUCHED_SKILL_NAMES || '';
+            const touchedSkills = cleanRaw
+              .split(',')
+              .map((s) => s.trim())
+              .filter(Boolean);
+
+            const selectionReason = (process.env.TOUCHED_SKILLS || '').trim();
+
+            const matchedRaw = process.env.TEST_NAMES || '';
+            const matchedCountRaw = (process.env.MATCHED_TEST_COUNT || '').trim();
+            // When detect picked a full-catalog fallback (infra touch,
+            // tests.json parse failure, etc.) TEST_NAMES is the literal
+            // sentinel 'all' and MATCHED_TEST_COUNT is also 'all'. The
+            // sentinel is NOT a real test name -- splitting it into
+            // ['all'] would render as "Matched tests (1): `all`". Strip
+            // it from the list and let buildStickyBody key off
+            // matchedCount === 'all' to display "entire catalog".
+            const isAllSentinel = matchedCountRaw === 'all' || matchedRaw.trim() === 'all';
+            const matchedTests = isAllSentinel
+              ? []
+              : matchedRaw
+                  .split(',')
+                  .map((s) => s.trim())
+                  .filter(Boolean);
+            const matchedCount = matchedCountRaw || undefined;
+
+            let failedTests = [];
+            try {
+              const raw = process.env.FAILED_TESTS;
+              if (raw) failedTests = JSON.parse(raw);
+              if (!Array.isArray(failedTests)) failedTests = [];
+            } catch (e) {
+              failedTests = [];
+            }
+
+            const currentState = {
+              authReady: process.env.AUTH_READY,
+              authMode: process.env.AUTH_MODE,
+              smokeResult: process.env.SMOKE_RESULT,
+              total: process.env.TOTAL_COUNT || '0',
+              pass: process.env.PASS_COUNT || '0',
+              flaky: process.env.FLAKY_COUNT || '0',
+              fail: process.env.FAIL_COUNT || '0',
+              touchedSkills,
+              selectionReason,
+              matchedTests,
+              matchedCount,
+              failedTests,
+              runUrl,
+            };
+
+            // Paginate listComments so the marker is reliably found even
+            // on PRs with >100 comments. Filter to bot-authored comments
+            // so a PR participant pasting the marker into a normal comment
+            // can't be mistaken for the sticky.
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+            const existingSticky = comments.find(
+              (c) =>
+                c.user &&
+                c.user.type === 'Bot' &&
+                c.user.login === 'github-actions[bot]' &&
+                c.body &&
+                c.body.includes(STICKY_MARKER) &&
+                !c.body.includes(TRANSITION_MARKER)
+            );
+            const priorState = existingSticky ? parseStickyState(existingSticky.body) : null;
+            const diff = diffStates(priorState, currentState);
+
+            // Stale-run guard: cancel-in-progress mostly handles this, but if
+            // an older run reaches this step after a new push has landed,
+            // bail out so we don't overwrite the sticky with stale data or
+            // post a transition for an old SHA.
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            if (pr.head.sha !== headSha) {
+              core.notice(`Skipping stale smoke comment for ${headSha} (current PR head is ${pr.head.sha}).`);
+              return;
+            }
+
+            // Always update or create the sticky.
+            const newStickyBody = buildStickyBody(currentState);
+            let stickyId;
+            if (existingSticky) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingSticky.id,
+                body: newStickyBody,
+              });
+              stickyId = existingSticky.id;
+              core.notice(`Updated existing PR-touched smoke sticky #${stickyId}`);
+            } else {
+              const created = await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: newStickyBody,
+              });
+              stickyId = created.data.id;
+              core.notice(`Posted new PR-touched smoke sticky #${stickyId}`);
+            }
+
+            // Decide on transition comment.
+            if (!shouldPostTransition(diff)) {
+              core.notice('No signal change detected -- skipping transition comment.');
+              return;
+            }
+            const stickyUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/pull/${prNumber}#issuecomment-${stickyId}`;
+            const transitionBody = buildTransitionBody({
+              diff,
+              current: currentState,
+              runUrl,
+              shortSha,
+              stickyCommentUrl: stickyUrl,
+            });
+            const transitionComment = await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: transitionBody,
+            });
+            core.notice(`Posted transition comment #${transitionComment.data.id}`);

@@ -1,0 +1,262 @@
+# Vally eval config -- pilot migration from tests/tests.json (skills-for-fabric)
+# Source stimulus: tests/tests.json entry "dataflows-consumption-list-and-inspect"
+#
+# Global graders (evaluate#125 workaround): completed + output-not-matches
+# are duplicated into every stimulus block below (per-stimulus pattern).
+#
+# Known gap: prompts contain {{WORKSPACE}} placeholder substituted at runtime by
+# tests/testFabricSkills.ps1. Vally has no built-in substitution today; real
+# outer-loop runs need a substituted copy. See inbox/vally-grader-pilot-2026-05-13.md.
+
+name: dataflows-consumption-list-and-inspect-integration-eval
+description: |
+  Integration evaluation for dataflows-consumption-cli -- pilot migration of the
+  dataflows-consumption-list-and-inspect smoke stimulus into the migrated Vally eval.yaml
+  shape (skill-invocation + completed + output-not-matches + output-contains for
+  expectedResults parity with tests/testFabricSkills.ps1).
+
+tags:
+  type: integration
+  skill: dataflows-consumption-cli
+
+environment:
+  skills:
+    - ../../../skills/dataflows-consumption-cli
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- dataflows-consumption-list-and-inspect --
+  # Source: tests/tests.json (area=dataflows)
+  - name: "List dataflows and decode definition"
+    prompt: |
+      List all Dataflows Gen2 in the {{WORKSPACE}} workspace. Then pick any one
+      dataflow and decode its definition to show me the Power Query M mashup
+      code. Only use the specified workspace. If not found, report an error.
+      Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: dataflows
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - spark-consumption-cli
+        - eventhouse-consumption-cli
+    graders:
+      # Positive AND negative routing in one built-in grader.
+      # Positive: dataflows-consumption-cli was activated.
+      # Negative: agent did NOT detour into spark or eventhouse.
+      - type: skill-invocation
+        config:
+          required:
+            - dataflows-consumption-cli
+          disallowed:
+            - spark-consumption-cli
+            - eventhouse-consumption-cli
+      # Global: has_output
+      - type: completed
+      # Global: no_runtime_failure
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      # expectedResults parity with smoke
+      - type: output-matches
+        config:
+          pattern: "(?i)section\\s+Section1"
+      - type: output-matches
+        config:
+          pattern: "(?i)\\bshared\\b"
+      # expectedResults parity with smoke
+      - type: output-contains
+        config:
+          substring: "section Section1"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- dataflows-consumption-query-execution --
+  # Source: tests/tests.json (area=dataflows)
+  # TODO(<team>): calibrate constraints over first 1-2 weeks; pilot defaults inherited from eventhouse-authoring-cli
+  - name: "Execute named Dataflow Gen2 query"
+    prompt: |
+      In the {{WORKSPACE}} workspace, find the Dataflow Gen2 named 'SkillsTestDataflow' and execute the dataflow query named 'Output' (do not pick another query). Parse the Apache Arrow binary response and show me the column names returned. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: dataflows
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - dataflows-authoring-cli
+        - spark-consumption-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - dataflows-consumption-cli
+          disallowed:
+            - dataflows-authoring-cli
+            - spark-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          pattern: "(?i)\\bArrow\\b"
+      # expectedResults parity with smoke
+      - type: output-contains
+        config:
+          substring: "City"
+      - type: output-contains
+        config:
+          substring: "Population"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- dataflows-consumption-query-with-custom-m --
+  # Source: tests/tests.json (area=dataflows)
+  # TODO(<team>): calibrate constraints over first 1-2 weeks; pilot defaults inherited from eventhouse-authoring-cli
+  - name: "Execute ad-hoc Dataflow Gen2 custom M query"
+    prompt: |
+      In the {{WORKSPACE}} workspace, against the Dataflow Gen2 named 'SkillsTestDataflow', run an ad-hoc executeQuery with a customMashupDocument that defines a complete section document containing a shared query named 'AdHoc' returning a table with a column 'k' and values 7, 8, 9. Show me how to parse the Apache Arrow response. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: dataflows
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - dataflows-authoring-cli
+        - spark-consumption-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - dataflows-consumption-cli
+          disallowed:
+            - dataflows-authoring-cli
+            - spark-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          pattern: "(?i)\\bAdHoc\\b"
+      - type: output-contains
+        config:
+          substring: "executeQuery"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- dataflows-consumption-refresh-history --
+  # Source: tests/tests.json (area=dataflows)
+  # TODO(<team>): calibrate constraints over first 1-2 weeks; pilot defaults inherited from eventhouse-authoring-cli
+  - name: "Inspect Dataflow Gen2 refresh history"
+    prompt: |
+      In the {{WORKSPACE}} workspace, show me the refresh history and last refresh status of the Dataflow Gen2 named 'SkillsTestDataflow', including the start and end times of the most recent run if any. Read-only inspection -- do not start a new run. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: dataflows
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - dataflows-authoring-cli
+        - spark-consumption-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - dataflows-consumption-cli
+          disallowed:
+            - dataflows-authoring-cli
+            - spark-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          pattern: "(?i)refresh history"
+      - type: output-contains
+        config:
+          substring: "status"
+      - type: output-contains
+        config:
+          substring: "SkillsTestDataflow"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50

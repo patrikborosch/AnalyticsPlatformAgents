@@ -9,10 +9,10 @@ This document provides step-by-step instructions for configuring GitHub reposito
 - Repository admin access
 - GitHub organization settings (if applicable)
 - Four maintainer accounts ready:
-  - `<maintainer-1-email>`
-  - `<maintainer-2-email>`
-  - `<maintainer-3-email>`
-  - `<maintainer-4-email>`
+  - Bogdan.Crivat@microsoft.com
+  - Santhosh.Ravindran@microsoft.com
+  - Jeffrey.Wang@microsoft.com
+  - Cristian.Popa@microsoft.com
 
 ---
 
@@ -24,10 +24,10 @@ This document provides step-by-step instructions for configuring GitHub reposito
 
 1. **Remove all existing collaborators** except maintainers
 2. **Add maintainers** with `Admin` role:
-   - Add: `<maintainer-1-email>` → Role: `Admin`
-   - Add: `<maintainer-2-email>` → Role: `Admin`
-   - Add: `<maintainer-3-email>` → Role: `Admin`
-   - Add: `<maintainer-4-email>` → Role: `Admin`
+   - Add: `Bogdan.Crivat@microsoft.com` → Role: `Admin`
+   - Add: `Santhosh.Ravindran@microsoft.com` → Role: `Admin`
+   - Add: `Jeffrey.Wang@microsoft.com` → Role: `Admin`
+   - Add: `Cristian.Popa@microsoft.com` → Role: `Admin`
 3. **Set base permissions** (if in organization):
    - Base permission: `Read` (public repo) or `None` (private repo)
 
@@ -43,10 +43,10 @@ This document provides step-by-step instructions for configuring GitHub reposito
 
 1. **Create team**: `fabricskills-maintainers`
 2. **Add members**:
-   - `<maintainer-1-email>`
-   - `<maintainer-2-email>`
-   - `<maintainer-3-email>`
-   - `<maintainer-4-email>`
+   - Bogdan.Crivat@microsoft.com
+   - Santhosh.Ravindran@microsoft.com
+   - Jeffrey.Wang@microsoft.com
+   - Cristian.Petculescu@microsoft.com
 3. **Add team to repository**:
    - Repository → Settings → Collaborators and teams
    - Add team: `fabricskills-maintainers` → Role: `Admin`
@@ -89,7 +89,8 @@ This document provides step-by-step instructions for configuring GitHub reposito
 - CodeQL SAST (security-codeql.yml.disabled)
 - Dependency review (dependency-review.yml.disabled)
 - Linting (lint.yml.disabled)
-- Dependabot (dependabot.yml.disabled)
+
+**Active dependency updates**: Dependabot (`.github/dependabot.yml`) -- `github-actions` ecosystem only, grouped by maintainer org, weekly Monday 06:00 UTC. See PR #328.
 
 #### 2.1.3: Other Settings
 
@@ -331,9 +332,10 @@ The following workflows are disabled to prevent PR blocking issues but can be re
 - CodeQL / Analyze (python)
 - CodeQL / Analyze (javascript-typescript)
 
-**Dependency Management** (`.github/workflows/dependency-review.yml.disabled` + `.github/dependabot.yml.disabled`)
+**Dependency Management** (`.github/workflows/dependency-review.yml.disabled`)
 - Dependency Review / Review Dependencies
-- Dependabot automated updates
+
+Dependabot is now ACTIVE for the `github-actions` ecosystem (`.github/dependabot.yml`); see the "Active dependency updates" callout in section 2.1.2 above. PR-side dependency review remains disabled.
 
 **Supply Chain** (`.github/workflows/ossf-scorecard.yml.disabled`)
 - OpenSSF Scorecard / Scorecard Analysis
@@ -347,11 +349,11 @@ The following workflows are disabled to prevent PR blocking issues but can be re
 **Questions about configuration?**
 - Open an issue in the repository
 - Contact maintainers:
-  - `<maintainer-1-email>`
-  - `<maintainer-2-email>`
+  - Bogdan.Crivat@microsoft.com
+  - Santhosh.Ravindran@microsoft.com
 
 **Security concerns?**
-- Follow [SECURITY.md](../SECURITY.md) reporting process
+- Follow [SECURITY.md](../../SECURITY.md) reporting process
 
 ---
 

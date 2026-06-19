@@ -1,0 +1,87 @@
+paths:
+  skills: skills/
+  evals: tests/evals/
+  results: tests/.vally-results/
+
+# Suite filters use the native vally shape: filter.<key>: <value(s)>.
+# The wrapper script (tests/run-vally-eval.ps1) translates each key/value
+# pair into a `--tag key=value` arg for vally CLI so the same suite
+# definitions are usable via both `vally eval --suite <name>` and the
+# wrapper's --eval-spec staging path.
+suites:
+  ci:
+    description: Default CI suite -- excludes MSIT-only evals (see msit suite)
+    filter:
+      skill:
+        - eventhouse-consumption-cli
+        - eventhouse-authoring-cli
+        - activator-consumption-cli
+        - activator-authoring-cli
+        - semantic-model-consumption
+        - fabriciq
+        - semantic-model-authoring
+        - eventstream-consumption-cli
+        - eventstream-authoring-cli
+        - sqldw-consumption-cli
+        - spark-consumption-cli
+        - spark-consumption-cli-isolated
+        - spark-authoring-cli
+        - spark-operations-cli
+        - dataflows-consumption-cli
+        - dataflows-authoring-cli
+        - dataflows-save-as-authoring-cli
+        - search-consumption-cli
+        - synapse-migration
+        - agent
+        - powerbi-report-planning
+        - powerbi-report-design
+        - powerbi-report-authoring
+        - powerbi-report-management
+  smoke:
+    description: |
+      Smoke-tier stimuli only (fastest subset). Filter matches stimuli tagged
+      `tier: smoke`. MSIT-only stimuli (tagged `scope: msit-only` instead of
+      `tier: smoke`) are excluded by construction and run via the `msit` suite.
+    filter:
+      tier: smoke
+  consumption:
+    description: Consumption-persona evals
+    filter:
+      skill:
+        - eventhouse-consumption-cli
+        - activator-consumption-cli
+        - semantic-model-consumption
+        - fabriciq
+        - eventstream-consumption-cli
+        - sqldw-consumption-cli
+        - spark-consumption-cli
+        - dataflows-consumption-cli
+        - search-consumption-cli
+  authoring:
+    description: Authoring-persona evals
+    filter:
+      skill:
+        - eventhouse-authoring-cli
+        - activator-authoring-cli
+        - eventstream-authoring-cli
+        - semantic-model-authoring
+        - spark-authoring-cli
+        - dataflows-authoring-cli
+        - dataflows-save-as-authoring-cli
+        - powerbi-report-planning
+        - powerbi-report-design
+        - powerbi-report-authoring
+        - powerbi-report-management
+  operations:
+    description: Operations-persona evals (portable -- excludes MSIT-only)
+    filter:
+      skill:
+        - spark-operations-cli
+  composition:
+    description: Composition matrix variants (isolated skill loading)
+    filter:
+      type: composition
+  msit:
+    description: MSIT-only evals (require MSSales workspace/warehouse access)
+    filter:
+      scope: msit-only

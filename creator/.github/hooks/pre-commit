@@ -1,0 +1,187 @@
+#!/usr/bin/env python
+"""
+Pre-commit hook for security and quality scanning
+Run this before committing changes to catch issues early
+"""
+import subprocess
+import sys
+import re
+import os
+import io
+from pathlib import Path
+
+# Fix Unicode output on Windows (cp1252 can't handle emoji)
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+# Force UTF-8 encoding for subprocess on Windows
+env = os.environ.copy()
+env['PYTHONIOENCODING'] = 'utf-8'
+
+def sanitize_output(output):
+    """Remove potentially sensitive information from output"""
+    if not output:
+        return output
+    
+    # Remove file paths with usernames
+    sanitized = re.sub(r'C:\\Users\\[^\\]+', 'C:\\Users\\<user>', output)
+    sanitized = re.sub(r'/home/[^/]+', '/home/<user>', sanitized)
+    
+    # Improved token detection - only flag likely secrets, not arbitrary strings
+    # GitHub tokens (ghp_, gho_, etc.)
+    sanitized = re.sub(r'gh[ospru]_[A-Za-z0-9]{36,}', '<redacted-github-token>', sanitized)
+    # AWS keys
+    sanitized = re.sub(r'AKIA[0-9A-Z]{16}', '<redacted-aws-key>', sanitized)
+    # Azure connection strings
+    sanitized = re.sub(r'DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[^;]+', '<redacted-azure-connstr>', sanitized)
+    # Generic API keys with common prefixes
+    sanitized = re.sub(r'(api[_-]?key|apikey|access[_-]?token)\s*[:=]\s*[\'"]?([A-Za-z0-9_\-]{20,})[\'"]?', r'\1=<redacted>', sanitized, flags=re.IGNORECASE)
+    
+    # Remove git commit hashes (but not other hex strings that might be IDs)
+    sanitized = re.sub(r'\b[a-f0-9]{40}\b', '<commit-hash>', sanitized)
+    
+    return sanitized
+
+def run_subprocess(cmd):
+    """Run subprocess with proper UTF-8 encoding on Windows.
+    
+    Uses binary mode and manual decoding to avoid Windows cp1252 issues.
+    """
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env
+    )
+    # Decode bytes manually with UTF-8, replacing errors
+    stdout = result.stdout.decode('utf-8', errors='replace') if result.stdout else ''
+    stderr = result.stderr.decode('utf-8', errors='replace') if result.stderr else ''
+    
+    # Create a simple result object
+    class Result:
+        pass
+    r = Result()
+    r.stdout = stdout
+    r.stderr = stderr
+    r.returncode = result.returncode
+    return r
+
+def run_security_scan():
+    """Run security scan on changed files"""
+    try:
+        # Check if we're in a git repository
+        result = run_subprocess(['git', 'rev-parse', '--git-dir'])
+        if result.returncode != 0:
+            print("⚠️  Not in a git repository, skipping security scan")
+            return True
+        
+        # Get list of staged markdown files
+        result = run_subprocess(['git', 'diff', '--cached', '--name-only', '--diff-filter=ACM'])
+        
+        if result.returncode != 0:
+            print("⚠️  Could not get list of staged files")
+            return True
+        
+        staged_files = result.stdout.strip().split('\n') if result.stdout.strip() else []
+        skill_files = [f for f in staged_files if f.endswith('.md') and ('skills/' in f or '.github/skills/' in f)]
+        
+        if not skill_files:
+            print("✅ No skill markdown files to scan")
+            return True
+        
+        print(f"🔍 Running security scan on {len(skill_files)} skill file(s)...")
+        
+        # Run the security scanner
+        scanner_path = Path(__file__).parent / 'security_scanner.py'
+        if not scanner_path.exists():
+            scanner_path = Path('.github/workflows/security_scanner.py')
+        
+        if not scanner_path.exists():
+            print("⚠️  Security scanner not found, skipping scan")
+            return True
+        
+        result = run_subprocess([sys.executable, str(scanner_path)])
+        
+        # Sanitize output to prevent PII leakage
+        safe_stdout = sanitize_output(result.stdout)
+        print(safe_stdout)
+        if result.stderr:
+            safe_stderr = sanitize_output(result.stderr)
+            print("Errors:", safe_stderr)
+        
+        if result.returncode == 1:  # Critical security issues
+            print("\n🚨 COMMIT BLOCKED - Critical security issues found!")
+            print("Please fix the security issues before committing.")
+            return False
+        elif result.returncode == 2:  # System error
+            print("\n💥 Security scan failed due to system error")
+            print("Please check the security scanner and try again.")
+            return False
+        else:
+            if result.returncode == 0 and "REVIEW REQUIRED" in result.stdout:
+                print("\n⚠️  Security issues detected but commit allowed")
+                print("Please review and address issues before pushing changes.")
+            else:
+                print("\n✅ Security scan passed")
+            return True
+        
+    except Exception as e:
+        print(f"⚠️  Security scan failed: {e}")
+        print("Allowing commit but please run security scan manually")
+        return True
+
+def run_quality_check():
+    """Run quality check on skill files"""
+    try:
+        # Get list of staged markdown files
+        result = run_subprocess(['git', 'diff', '--cached', '--name-only', '--diff-filter=ACM'])
+        
+        staged_files = result.stdout.strip().split('\n') if result.stdout.strip() else []
+        skill_files = [f for f in staged_files if f.endswith('.md') and 'skills/' in f and 'graveyard' not in f]
+        
+        if not skill_files:
+            return True  # No skill files changed
+        
+        print(f"\n🔍 Running quality check on skill files...")
+        
+        # Run the quality checker
+        checker_path = Path('.github/workflows/quality_checker.py')
+        
+        if not checker_path.exists():
+            print("⚠️  Quality checker not found, skipping check")
+            return True
+        
+        result = run_subprocess([sys.executable, str(checker_path)])
+        
+        # Sanitize output to prevent PII leakage
+        safe_stdout = sanitize_output(result.stdout)
+        print(safe_stdout)
+        if result.stderr:
+            safe_stderr = sanitize_output(result.stderr)
+            print("Errors:", safe_stderr)
+        
+        if result.returncode == 1:  # Critical quality issues
+            print("\n🚨 COMMIT BLOCKED - Critical quality issues found!")
+            print("Please fix the issues before committing.")
+            print("Run 'python .github/workflows/quality_checker.py' to see details.")
+            return False
+        elif result.returncode == 2:  # System error
+            print("\n💥 Quality check failed due to system error")
+            return False
+        else:
+            print("\n✅ Quality check passed")
+            return True
+        
+    except Exception as e:
+        print(f"⚠️  Quality check failed: {e}")
+        print("Allowing commit but please run quality check manually")
+        return True
+
+if __name__ == "__main__":
+    security_ok = run_security_scan()
+    quality_ok = run_quality_check()
+
+    if not security_ok or not quality_ok:
+        sys.exit(1)  # Block commit
+    sys.exit(0)  # Allow commit

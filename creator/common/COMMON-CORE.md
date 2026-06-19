@@ -19,10 +19,10 @@
 
 ### Finding Things in Fabric
 
-- If workspace AND item are specified:
-  1. Resolve workspace ID by name if needed (see Resolve Workspace Properties by Name)
-  2. Resolve item properties within the workspace (see Resolve Item Properties by Name)
-- If workspace is *not specified*: use Catalog Search APIs
+1. If workspace AND item are specified:
+   1. Resolve workspace ID by name if needed (see Resolve Workspace Properties)
+   2. Resolve item properties within the workspace (see Resolve Item Properties by Name)
+2. If workspace is *not specified*: use the Catalog Search API (see Catalog Search)
 
 *Use APIs exactly as specified — they have implementation limitations.*
 
@@ -119,6 +119,21 @@ All requests require `Authorization: Bearer <token>` and `Content-Type: applicat
 
 Useful response headers: `x-ms-request-id` (troubleshooting), `x-ms-operation-id` (LRO tracking), `Location` (LRO poll URL), `Retry-After` (wait time on 202/429).
 
+### Catalog Search
+
+```
+POST /v1/catalog/search
+{ "search": "<text>", "filter": "Type eq '<itemType>'", "pageSize": 10, "continuationToken": "..." }
+```
+
+**Required delegated scope:** `Catalog.Read.All`
+
+Response: `{ "value": [{ "id", "type", "catalogEntryType", "displayName", "description", "hierarchy": { "workspace": { "id", "displayName" } } }], "continuationToken" }`
+
+* Filter supports `eq`, `ne`, `or`, and parentheses.
+* `search` can be empty, allowing filtering by type only.
+* Indexing delay: Newly created items can take up to 24 hours to appear in search results.
+ 
 ### List Workspaces
 
 ```
@@ -143,7 +158,7 @@ GET /v1/workspaces/<workspaceId>/items[?type=Lakehouse|Warehouse|...][&continuat
 
 Response: `{ "value": [{ "id", "displayName", "type", "workspaceId" }], "continuationToken" }`
 
-### List Items by Specific Type
+### List Items in a workspace by Specific Type
 
 Type-specific endpoints return additional `properties` (connection strings, etc.):
 
@@ -159,15 +174,26 @@ GET /v1/workspaces/<workspaceId>/items/<itemId>
 
 Or type-specific: `GET /v1/workspaces/<workspaceId>/warehouses/<warehouseId>`
 
-### Resolve Workspace Properties by Name
+### Resolve Workspace Properties
+
+**Prefer direct ID lookup whenever a workspace UUID is available** (from a prior create response, earlier list result already in context, or explicit user input): call `GET /v1/workspaces/<workspaceId>` directly. Permission-checked direct lookup with no listing or filtering concerns. See [Get Workspace reference](https://learn.microsoft.com/en-us/rest/api/fabric/core/workspaces/get-workspace).
+
+**Resolve by name (only when an ID is not available).** The Fabric REST API has no "get workspace by name" endpoint:
 
 1. Call `GET /v1/workspaces`
 2. Iterate with pagination until `displayName` matches.
 
+> **Filter on `displayName`, not `name`.** The Workspace object exposes `displayName`, not `name` (see [List Workspaces reference](https://learn.microsoft.com/en-us/rest/api/fabric/core/workspaces/list-workspaces)). JMESPath queries on `name` (filter or projection) return empty / nulls and are easily misread as "workspace not found".
+
 ### Resolve Item Properties by Name
 
+When workspace is known:
 1. Call `GET /v1/workspaces/<workspaceId>/items?type=<ItemType>`
 2. Iterate with pagination until `displayName` matches.
+
+When workspace is not known (cross-workspace discovery):
+1. Call `POST /v1/catalog/search` with the item name and optional type filter.
+2. If ambiguous, present results and ask the user to disambiguate.
 
 ### Get Item Connections
 
@@ -229,21 +255,6 @@ POST /v1/workspaces/<workspaceId>/items/<itemId>/updateDefinition[?updateMetadat
 ```
 
 > **Gotcha**: Omitting `?updateMetadata=true` silently ignores the `.platform` part.
-
-### Move Item to Folder
-
-Moves an item (and its child items) to a folder within the same workspace. Use this to organise items into workspace folders after creation.
-
-```
-POST /v1/workspaces/<workspaceId>/items/<itemId>/move
-{ "targetFolderId": "<folderId>" }
-```
-
-Response (200): `{ "value": [{ "id", "displayName", "type", "workspaceId", "folderId" }, ...] }` — returns the moved item plus any child items (e.g. a Lakehouse returns its SQLEndpoint child).
-
-To move an item back to the workspace root, send an empty body `{}`.
-
-> **Note**: The Update Item (`PATCH`) API does **not** support changing `folderId`. You must use this dedicated Move endpoint.
 
 ### Pagination
 

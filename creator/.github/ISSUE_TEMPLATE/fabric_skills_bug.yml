@@ -1,0 +1,159 @@
+name: "\U0001F41E Fabric Skills – Bug / Error"
+description: Report an error, failure, or unexpected behavior when using Fabric Skills with Copilot CLI
+title: "[Bug]: "
+labels: ["bug", "fabric-skills", "triage"]
+body:
+
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting an issue with **Fabric Skills**.
+        High-quality reports with **full CLI traces** help us diagnose and fix issues faster.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: |
+        Clearly describe the problem. Include:
+        - What you were trying to do
+        - What you expected to happen
+        - What actually happened
+      placeholder: |
+        The command failed when creating a workspace using Fabric Skills...
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Provide exact step-by-step instructions so we can reliably reproduce the issue.
+      placeholder: |
+        1. Open PowerShell 7
+        2. Run `copilot`
+        3. Execute Fabric Skills command ...
+        4. Observe error ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: error
+    attributes:
+      label: Full error output
+      description: |
+        Paste the **complete** error message exactly as shown.
+        Do not paraphrase or truncate.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: trace
+    attributes:
+      label: Copilot CLI execution trace
+      description: |
+        Paste the **full Copilot CLI trace** from the failing command.
+        This is critical for debugging skill routing and execution flow.
+
+        **How to capture:**
+        1. Run the failing command with tracing or verbose logging enabled
+        2. Copy the full output from the terminal
+        3. Paste it here
+
+        ⚠️ Do not redact or summarize the trace unless it contains secrets or tokens.
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+
+  - type: input
+    id: powershell
+    attributes:
+      label: PowerShell version
+      description: Run `$PSVersionTable.PSVersion` to find this.
+      placeholder: "7.4.x"
+    validations:
+      required: true
+
+  - type: input
+    id: copilot
+    attributes:
+      label: GitHub Copilot CLI version
+      description: Run `gh copilot --version` or `copilot --version` to find this.
+      placeholder: "e.g. 1.0.x"
+    validations:
+      required: true
+
+  - type: input
+    id: skills
+    attributes:
+      label: Fabric Skills version
+      description: Check `package.json` or run the check-updates skill.
+      placeholder: "e.g. 1.2.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: skill
+    attributes:
+      label: Which skill is affected?
+      options:
+        - sqldw-authoring-cli
+        - sqldw-consumption-cli
+        - spark-authoring-cli
+        - spark-consumption-cli
+        - e2e-medallion-architecture
+        - check-updates
+        - Other / Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ai_tool
+    attributes:
+      label: AI tool used
+      description: Which AI coding tool were you using?
+      options:
+        - GitHub Copilot CLI
+        - VS Code Copilot
+        - Claude Code
+        - Cursor
+        - Windsurf
+        - Codex / Jules
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Any other relevant information (screenshots, workarounds tried, etc.)
+      placeholder: Optional — add anything else that might help.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checks
+      options:
+        - label: I am using my **Microsoft EMU GitHub account**
+          required: true
+        - label: I included the **full Copilot CLI trace**
+          required: true
+        - label: I verified this is not a setup issue covered in the user guide
+          required: true
+        - label: This issue does **not** contain secrets, tokens, or credentials
+          required: true

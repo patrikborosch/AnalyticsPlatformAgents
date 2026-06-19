@@ -1,0 +1,137 @@
+name: Vally Fabric auth
+description: >-
+  Materialise the Fabric service-principal credential for the vally smoke
+  harness. Supports Phase A (direct secrets) and Phase B (OIDC + Key Vault).
+  Exports TENANT_DOMAIN, SP_APP_ID, SP_OBJECT_ID, SP_CERT_PATH (and TENANT_ID
+  for Phase B) into GITHUB_ENV for downstream steps in the same job.
+
+inputs:
+  mode:
+    description: 'Auth mode: phaseA (direct secrets) or phaseB (OIDC + Key Vault).'
+    required: true
+  sp-app-id:
+    description: 'Phase A: service principal application (client) id.'
+    required: false
+    default: ''
+  sp-cert-base64:
+    description: 'Phase A: base64-encoded PEM (private key + certificate).'
+    required: false
+    default: ''
+  sp-object-id:
+    description: 'Phase A: service principal object id.'
+    required: false
+    default: ''
+  tenant-domain:
+    description: 'Phase A: tenant domain (e.g. contoso.onmicrosoft.com).'
+    required: false
+    default: ''
+  azure-client-id:
+    description: 'Phase B: UAMI / federated client id for azure/login OIDC.'
+    required: false
+    default: ''
+  azure-tenant-id:
+    description: 'Phase B: Azure tenant id for azure/login OIDC.'
+    required: false
+    default: ''
+  azure-subscription-id:
+    description: 'Phase B: Azure subscription id for azure/login OIDC.'
+    required: false
+    default: ''
+  kv-name:
+    description: 'Phase B: Key Vault name holding the SP identifiers and cert.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # --- Phase A: direct secrets ---
+    - name: Phase A -- materialise SP cert from secret
+      if: inputs.mode == 'phaseA'
+      shell: bash
+      env:
+        SP_APP_ID: ${{ inputs.sp-app-id }}
+        SP_CERT_BASE64: ${{ inputs.sp-cert-base64 }}
+        SP_OBJECT_ID: ${{ inputs.sp-object-id }}
+        TENANT_DOMAIN_SECRET: ${{ inputs.tenant-domain }}
+      run: |
+        set -euo pipefail
+        PEM_PATH="${RUNNER_TEMP}/sp-cert.pem"
+        printf '%s' "$SP_CERT_BASE64" | tr -d '\r\n ' | base64 -d > "$PEM_PATH"
+        chmod 600 "$PEM_PATH"
+        grep -q "BEGIN PRIVATE KEY\|BEGIN RSA PRIVATE KEY" "$PEM_PATH" || { echo "::error::SP_CERT_BASE64 does not decode to a PEM with a private key"; exit 1; }
+        grep -q "BEGIN CERTIFICATE" "$PEM_PATH" || { echo "::error::SP_CERT_BASE64 does not decode to a PEM with a certificate"; exit 1; }
+        echo "::add-mask::$SP_APP_ID"
+        echo "::add-mask::$SP_OBJECT_ID"
+        {
+          echo "TENANT_DOMAIN=$TENANT_DOMAIN_SECRET"
+          echo "SP_APP_ID=$SP_APP_ID"
+          echo "SP_OBJECT_ID=$SP_OBJECT_ID"
+          echo "SP_CERT_PATH=$PEM_PATH"
+        } >> "$GITHUB_ENV"
+
+    # --- Phase B: OIDC + Key Vault ---
+    - name: Phase B -- Azure login via OIDC to UAMI
+      if: inputs.mode == 'phaseB'
+      uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        subscription-id: ${{ inputs.azure-subscription-id }}
+
+    - name: Phase B -- fetch tenant + SP identifiers from KV
+      if: inputs.mode == 'phaseB'
+      shell: bash
+      env:
+        KV: ${{ inputs.kv-name }}
+      run: |
+        set -euo pipefail
+        # Key Vault reads are network-bound and can fail transiently; keep auth
+        # fail-loud but retry short ECONNRESET/timeout blips before aborting.
+        # shellcheck source=../../scripts/retry.sh
+        source "${GITHUB_WORKSPACE}/.github/scripts/retry.sh"
+        TENANT_ID=$(retry az keyvault secret show --vault-name "$KV" --name "TENANT-ID"     --query value -o tsv)
+        TENANT_DOMAIN=$(retry az keyvault secret show --vault-name "$KV" --name "TENANT-DOMAIN" --query value -o tsv)
+        SP_APP_ID=$(retry az keyvault secret show --vault-name "$KV" --name "SP-APP-ID"      --query value -o tsv)
+        SP_OBJECT_ID=$(retry az keyvault secret show --vault-name "$KV" --name "SP-OBJECT-ID" --query value -o tsv)
+        # Phase A receives these as workflow-level secrets which GitHub's
+        # secret scrubber auto-masks in logs. Phase B sources from Key Vault
+        # output via `az keyvault secret show` -- that path bypasses the
+        # scrubber, so mask each value explicitly the moment it lands in the
+        # shell. Order matters: emit the masks BEFORE writing the values into
+        # GITHUB_ENV so the subsequent step's env-context printout in
+        # --verbose logs would already be scrubbed if the value happens to be
+        # echoed.
+        echo "::add-mask::$TENANT_ID"
+        echo "::add-mask::$TENANT_DOMAIN"
+        echo "::add-mask::$SP_APP_ID"
+        echo "::add-mask::$SP_OBJECT_ID"
+        {
+          echo "TENANT_ID=$TENANT_ID"
+          echo "TENANT_DOMAIN=$TENANT_DOMAIN"
+          echo "SP_APP_ID=$SP_APP_ID"
+          echo "SP_OBJECT_ID=$SP_OBJECT_ID"
+        } >> "$GITHUB_ENV"
+
+    - name: Phase B -- download SP cert (PFX from KV to PEM)
+      if: inputs.mode == 'phaseB'
+      shell: bash
+      env:
+        KV: ${{ inputs.kv-name }}
+      run: |
+        set -euo pipefail
+        # The certificate fetch is the highest-impact auth dependency, so use
+        # the same bounded retry policy as the identifier lookups above.
+        # shellcheck source=../../scripts/retry.sh
+        source "${GITHUB_WORKSPACE}/.github/scripts/retry.sh"
+        PFX_B64="${RUNNER_TEMP}/sp-cert.b64"
+        PFX_PATH="${RUNNER_TEMP}/sp-cert.pfx"
+        PEM_PATH="${RUNNER_TEMP}/sp-cert.pem"
+        retry az keyvault secret show --vault-name "$KV" --name "SP-CERT" --query value -o tsv > "$PFX_B64"
+        chmod 600 "$PFX_B64"
+        base64 -d "$PFX_B64" > "$PFX_PATH"
+        chmod 600 "$PFX_PATH"
+        openssl pkcs12 -in "$PFX_PATH" -out "$PEM_PATH" -nodes -passin "pass:"
+        chmod 600 "$PEM_PATH"
+        rm -f "$PFX_B64" "$PFX_PATH"
+        echo "SP_CERT_PATH=$PEM_PATH" >> "$GITHUB_ENV"

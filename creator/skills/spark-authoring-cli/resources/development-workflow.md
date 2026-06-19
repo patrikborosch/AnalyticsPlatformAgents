@@ -54,68 +54,18 @@ Guide LLM for execution patterns:
 
 ## Parameterization Patterns
 
-### When to Parameterize
-Tell LLM to make these configurable:
-- **Data paths**: Source file paths, target table names, partition values
-- **Processing dates**: Date ranges for incremental loads, effective dates
-- **Environment settings**: Workspace IDs, lakehouse IDs (different per dev/test/prod)
-- **Business logic**: Thresholds, filters, feature flags
+> For parameterization patterns (when to parameterize, parameter injection methods, Variable Library, configuration management), see [context-and-params.md](../../../common/notebook-authoring/context-and-params.md#parameterization-patterns). The section below covers Spark-specific development patterns only.
 
-### Parameter Injection Methods
 
-Guide LLM to implement one of these patterns:
+### Spark Session Configuration & Runtime
 
-**Method 1: Default Parameters in Notebook**
-- First code cell should define parameters with default values
-- Parameters: paths, table names, processing dates, business thresholds
-- LLM generates: variable assignments that can be overridden by pipeline
+**Agents must fetch official docs for details** — use the URLs below, not local descriptions.
 
-**Method 2: Pipeline Activity Parameters**
-- Pipeline JSON definition includes parameters section
-- Parameters mapped to notebook parameter names
-- LLM generates: Pipeline JSON with "parameters" object, notebook references
-- Use expressions like @formatDateTime() for dynamic values
-
-**Method 3: Livy Session Parameters**
-- Pass parameters via Livy API during session creation or statement execution
-- LLM generates: API calls with parameter payload in request body
-
-**Method 4: Variable Library**
-- Create a Variable Library item to store config (lakehouse names, workspace IDs, feature flags)
-- Use Value Sets (`valueSets/dev.json`, `valueSets/prod.json`) to promote across environments without code changes
-- Boolean values are returned as strings — compare with `.lower() == "true"`, not `bool()`
-
-*In Notebooks:*
-- Read with `notebookutils.variableLibrary.getLibrary("LibName").variable_name` (dot notation)
-- **NEVER** use `.get("lib", "var")` — it does not exist and causes runtime failure
-
-*In Data Pipelines:*
-1. Declare `libraryVariables` in pipeline `properties` (sibling to `activities`):
-   ```json
-   "libraryVariables": {
-     "notebook_id": {
-       "libraryName": "sales_analytics_config",
-       "libraryId": "<variable-library-item-id>",
-       "variableName": "notebook_id",
-       "type": "String"
-     }
-   }
-   ```
-2. Reference via expression syntax in activity `typeProperties`:
-   ```json
-   "notebookId": {
-     "value": "@pipeline().libraryVariables.notebook_id",
-     "type": "Expression"
-   }
-   ```
-- Each entry needs `libraryName`, `libraryId`, `variableName`, and `type`
-- Use `@pipeline().libraryVariables.<name>` — not `@variables()` (that is for regular pipeline variables)
-
-### Configuration Management
-Guide LLM to generate:
-- **Environment-specific configs**: Separate JSON files for dev/test/prod with workspace IDs, paths
-- **Config loading pattern**: Read from OneLake Files or environment variables
-- **Validation**: Assert required parameters are present before proceeding
+| Topic | Fetch URL | Keywords |
+|---|---|---|
+| %%configure magic command | https://learn.microsoft.com/en-us/fabric/data-engineering/author-execute-notebook#spark-session-configuration-magic-command | `%%configure`, `driverMemory`, `executorMemory`, `driverCores`, `executorCores`, `numExecutors`, `defaultLakehouse`, `mountPoints`, `sessionTimeoutInSeconds`, `useStarterPool`, `useWorkspacePool`, `conf`, Variable Library, session restart, `-f` flag |
+| Parameterized %%configure from pipeline | https://learn.microsoft.com/en-us/fabric/data-engineering/author-execute-notebook#parameterized-session-configuration-from-a-pipeline | `parameterName`, `defaultValue`, pipeline notebook activity, override %%configure, parameterized session config |
+| Spark compute (pools, node sizes, autoscale) | https://learn.microsoft.com/en-us/fabric/data-engineering/spark-compute | starter pool, custom Spark pool, node size (Small/Medium/Large/XL/XXL), vCores, autoscale, dynamic allocation, capacity units, single-node pool |
 
 ---
 

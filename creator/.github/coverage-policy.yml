@@ -1,0 +1,53 @@
+schemaVersion: 1
+description: Coverage enforcement policy for new skills and tracked allow-missing debt.
+
+defaults:
+  # Vally evals (tests/evals/<skill>/eval.yaml) are the primary behavior-testing
+  # surface after the #322 cutover and are required for new skills.
+  requireVallyEvalForNewSkills: true
+  # Legacy smoke (tests/tests.json) is manual break-glass only; it is no longer
+  # required for new skills. When false, smoke produces no blocking violations
+  # (neither per-new-skill nor baseline), so it cannot become a baseline landmine.
+  requireSmokeForNewSkills: false
+  requireIndividualEvalForNewSkills: true
+  requireCombinedEvalWhenPairedSkillExists: true
+
+allowMissing:
+  # Vally is the required surface. These are the skills that legitimately do not
+  # carry a tests/evals/<skill>/eval.yaml at the current baseline.
+  vallyEval:
+    check-updates:
+      status: exempt
+      reason: Utility skill for marketplace version checks; no Fabric workspace/runtime behavior to evaluate.
+    databricks-migration:
+      status: exempt
+      reason: Cross-platform migration guidance skill; no stable Fabric runtime action suitable for a Vally stimulus.
+    hdinsight-migration:
+      status: exempt
+      reason: Cross-platform migration guidance skill; no stable Fabric runtime action suitable for a Vally stimulus.
+    e2e-medallion-architecture:
+      status: exempt
+      reason: End-to-end orchestration pattern better covered by combined-eval scenarios than a single-skill Vally eval.
+    sqldw-authoring-cli:
+      status: debt
+      reason: Existing authoring skill without a dedicated Vally eval yet.
+  # Smoke is advisory (requireSmokeForNewSkills=false), so these entries are no
+  # longer enforced; retained for history and in case smoke is re-required.
+  smoke:
+    check-updates:
+      status: exempt
+      reason: Utility skill for marketplace version checks; no Fabric workspace/runtime behavior to smoke.
+    databricks-migration:
+      status: exempt
+      reason: Cross-platform migration guidance skill; no stable Fabric runtime action suitable for fast smoke.
+    e2e-medallion-architecture:
+      status: exempt
+      reason: End-to-end orchestration pattern better covered by benchmark/eval scenarios than fast smoke.
+    hdinsight-migration:
+      status: exempt
+      reason: Cross-platform migration guidance skill; no stable Fabric runtime action suitable for fast smoke.
+    sqldw-authoring-cli:
+      status: debt
+      reason: Existing authoring skill without a dedicated fast smoke case.
+  individualEval: {}
+  combinedEval: {}

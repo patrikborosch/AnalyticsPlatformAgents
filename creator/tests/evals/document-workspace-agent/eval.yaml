@@ -1,0 +1,92 @@
+# Vally eval config -- migrated from tests/tests.json (skills-for-fabric)
+# Source stimuli: document-workspace-agent
+#
+# Known gap: prompts contain {{WORKSPACE}} placeholder substituted at runtime by
+# tests/run-vally-eval.ps1. See tests/evals/README.md for local-run instructions.
+
+name: document-workspace-agent-integration-eval
+description: |
+  Integration evaluation for the workspace-documentation agent path -- verifies the agent returns workspace properties (name, id) when asked to document a workspace. expectedSkills is empty in tests.json (no specific skill required).
+
+tags:
+  type: integration
+  skill: agent
+
+environment:
+  # Source tests.json has expectedSkills: [] -- no required skill; the agent
+  # routes freely. Loading only search-consumption-cli biased the tool surface,
+  # so we load the full consumption (read) surface a documentation agent would
+  # plausibly route through. This restores the "agent picks freely" semantics
+  # of the legacy harness without pulling in authoring/migration skills that are
+  # irrelevant to documenting an existing workspace.
+  skills:
+    - ../../../skills/search-consumption-cli
+    - ../../../skills/activator-consumption-cli
+    - ../../../skills/dataflows-consumption-cli
+    - ../../../skills/eventhouse-consumption-cli
+    - ../../../skills/eventstream-consumption-cli
+    - ../../../skills/semantic-model-consumption
+    - ../../../skills/spark-consumption-cli
+    - ../../../skills/sqldw-consumption-cli
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- document-workspace-agent --
+  # Source: tests/tests.json (area=agent)
+  - name: "Document workspace properties"
+    prompt: |
+      Document the workspace called {{WORKSPACE}} (Exact name). I only want the workspace properties, not interested in any items or roles.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: agent
+      scope: agent
+    # Agent composes 8 consumption skills; no single required skill applies
+    # (the agent routes freely based on workspace content). The
+    # output-matches grader pinned to {{WORKSPACE_ID}} below already proves
+    # at least one workspace-reading skill was actually invoked.
+    l0_exempt:
+      - skill-invocation
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+    graders:
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          # Require the SPECIFIC workspace id the prompt asked about, not any
+          # GUID -- a stray id from a tool-call response payload would
+          # otherwise pass the regex even when the agent picked the wrong
+          # workspace. {{WORKSPACE_ID}} is substituted at stage time by
+          # tests/run-vally-eval.ps1 from the -WorkspaceId arg
+          # (CI sources it from last_setup.json -> workspace_id).
+          pattern: "{{WORKSPACE_ID}}"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50

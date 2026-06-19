@@ -319,7 +319,7 @@ dependencies:
 
 ```yaml
 enable_native_execution_engine: false
-instance_pool_id: 11112222-3333-4444-5555-666677778888
+instance_pool_id: 655fc33c-2712-45a3-864a-b2a00429a8aa
 driver_cores: 4
 driver_memory: 28g
 executor_cores: 4

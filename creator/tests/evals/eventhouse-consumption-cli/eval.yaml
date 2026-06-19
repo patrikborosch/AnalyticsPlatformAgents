@@ -1,0 +1,201 @@
+# Vally eval config -- migrated from tests/tests.json (skills-for-fabric)
+# Source stimuli: eventhouse-consumption-basic-query, eventhouse-consumption-analytical-query
+#
+# Known gap: prompts contain {{WORKSPACE}} placeholder substituted at runtime by
+# tests/run-vally-eval.ps1. See tests/evals/README.md for local-run instructions.
+
+name: eventhouse-consumption-cli-integration-eval
+description: |
+  Integration evaluation for eventhouse-consumption-cli -- verifies KQL query
+  execution against SkillsTestEventhouse database (row counts, analytical
+  aggregations) with correct skill routing.
+
+tags:
+  type: integration
+  skill: eventhouse-consumption-cli
+
+environment:
+  skills:
+    - ../../../skills/eventhouse-consumption-cli
+    - ../../../skills/eventhouse-authoring-cli
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- eventhouse-consumption-basic-query --
+  - name: "KQL basic row count"
+    prompt: |
+      I have a KQL database named SkillsTestEventhouse in the {{WORKSPACE}}
+      workspace in my fabric. How many rows are in the Weather table? Only use
+      the specified workspace. If not found, report an error. Do NOT search or
+      use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: eventhouse
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - spark-consumption-cli
+        - sqldw-consumption-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - eventhouse-consumption-cli
+          disallowed:
+            - spark-consumption-cli
+            - sqldw-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "59,066"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- eventhouse-consumption-analytical-query --
+  - name: "KQL analytical aggregation query"
+    prompt: |
+      I have a KQL database named SkillsTestEventhouse in the {{WORKSPACE}}
+      workspace in my fabric. The Weather table has storm event data with
+      columns like State, EventType, DamageProperty. For each state, find which
+      event type caused the highest total property damage. Then show me the top
+      3 states by that damage amount along with their most damaging event type.
+      Only use the specified workspace. If not found, report an error. Do NOT
+      search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: eventhouse
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - eventhouse-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "CALIFORNIA"
+      - type: output-matches
+        config:
+          pattern: "(?i)wildfire"
+      - type: output-matches
+        config:
+          pattern: "(?i)ice storm"
+      # expectedResults parity with smoke
+      - type: output-contains
+        config:
+          substring: "Wildfire"
+      - type: output-contains
+        config:
+          substring: "Ice Storm"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- Routing canary: eventstream-routing-not-eventhouse --
+  # NOTE: This stimulus intentionally crosses persona boundaries -- it lives
+  # in the eventhouse-CONSUMPTION eval but requires the eventhouse-AUTHORING
+  # skill. Rationale: routing canaries belong with the workload domain they
+  # protect (eventhouse), and the consumption suite is the most likely
+  # mis-routing target (creating a table without authoring skill loaded).
+  # Suite runs will execute this stimulus when consumption suite runs --
+  # that is by design. A future composition suite may absorb this canary.
+  - name: "Routing negative - eventstream prompt routed to eventhouse"
+    prompt: |
+      Create a KQL table in my Eventhouse for sensor readings in my
+      {{WORKSPACE}} workspace. Only use the specified workspace. If not found,
+      report an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: eventhouse
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - eventstream-authoring-cli
+        - eventstream-consumption-cli
+    # TODO(workload-team): backfill a deterministic positive output
+    # assertion (output-matches or output-contains on a tool-trace
+    # token, NOT on narrative prose). See tests/evals/README.md.
+    l0_exempt:
+      - positive-output-assertion
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - eventhouse-authoring-cli
+          disallowed:
+            - eventstream-authoring-cli
+            - eventstream-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50

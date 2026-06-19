@@ -1,0 +1,56 @@
+table Sales
+
+	column SalesID
+		dataType: int64
+		formatString: 0
+		summarizeBy: none
+		sourceColumn: SalesID
+
+	column OrderDate
+		dataType: dateTime
+		formatString: Short Date
+		summarizeBy: none
+		sourceColumn: OrderDate
+
+	column ProductName
+		dataType: string
+		summarizeBy: none
+		sourceColumn: ProductName
+
+	column Quantity
+		dataType: int64
+		formatString: 0
+		summarizeBy: sum
+		sourceColumn: Quantity
+
+	column UnitPrice
+		dataType: decimal
+		formatString: 0.00
+		summarizeBy: sum
+		sourceColumn: UnitPrice
+
+	measure 'Total Revenue' = SUMX(Sales, Sales[Quantity] * Sales[UnitPrice])
+		formatString: 0.00
+
+	measure 'Total Quantity' = SUM(Sales[Quantity])
+		formatString: 0
+
+	partition Sales = m
+		mode: import
+		source =
+				let
+					Source = #table(
+						type table[SalesID = Int64.Type, OrderDate = DateTime.Type, ProductName = Text.Type, Quantity = Int64.Type, UnitPrice = Currency.Type],
+						{
+							{1, #datetime(2024,1,15,0,0,0), "Alpha Widget", 10, 19.99},
+							{2, #datetime(2024,2,3,0,0,0), "Beta Gadget", 5, 49.50},
+							{3, #datetime(2024,3,21,0,0,0), "Gamma Tool", 8, 12.75},
+							{4, #datetime(2024,4,7,0,0,0), "Delta Device", 3, 99.00},
+							{5, #datetime(2024,5,18,0,0,0), "Epsilon Item", 12, 7.25}
+						}
+					)
+				in
+					Source
+
+	annotation PBI_ResultType = Table
+

@@ -1,0 +1,434 @@
+[
+  {
+    "_deprecated": "DEPRECATED: this catalog feeds the legacy smoke break-glass path only. New stims go to tests/evals/<skill>/eval.yaml. See tests/evals/README.md.",
+    "name": "_deprecated-tests-json-catalog",
+    "area": "legacy-smoke",
+    "prompt": "DEPRECATED: this catalog feeds the legacy smoke break-glass path only. New stims go to tests/evals/<skill>/eval.yaml. See tests/evals/README.md.",
+    "expectedSkills": [],
+    "expectedResults": []
+  },
+  {
+    "name": "sqldw-consumption-basic-query",
+    "area": "sqldw",
+    "prompt": "In Fabric, i have a lakehouse in the {{WORKSPACE}} workspace - named LSEGDemo. Using the SQL endpoint, tell me how many rows are in the nyctlc table? Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["sqldw-consumption-cli"],
+    "expectedResults": ["10,000"]
+  },
+  {
+    "name": "sqldw-consumption-advanced-query",
+    "area": "sqldw",
+    "prompt": "In Fabric, i have a lakehouse in the {{WORKSPACE}} workspace - named LSEGDemo. Using the SQL endpoint, get me the average trip distance broken down by vendor id. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["sqldw-consumption-cli"],
+    "expectedResults": ["2.8", "2.86"]
+  },
+  {
+    "name": "spark-consumption-livy-sanity",
+    "area": "spark",
+    "prompt": "In Fabric, i have a lakehouse in the {{WORKSPACE}} workspace - named LSEGDemo. Create a Livy session and run a simple calculation: 123+589. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["spark-consumption-cli"],
+    "expectedResults": ["712"]
+  },
+  {
+    "name": "spark-authoring-notebook-sanity",
+    "area": "spark",
+    "prompt": "Run the notebook named 'sparkauthoring_notebook_check' in the {{WORKSPACE}} workspace and wait for it to complete. Report the execution status. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["spark-authoring-cli"],
+    "expectedResults": ["sparkauthoring_notebook_check", "Completed"],
+    "flaky": { "githubIssue": "https://github.com/gim-home/skills-for-fabric/issues/131" }
+  },
+  {
+    "name": "document-workspace-agent",
+    "area": "agent",
+    "prompt": "Document the workspace called {{WORKSPACE}} (Exact name). I only want the workspace properties, not interested in any items or roles.",
+    "expectedSkills": [],
+    "expectedResults": ["{{WORKSPACE_ID}}"]
+  },
+  {
+    "name": "semantic-model-consumption-basic",
+    "area": "powerbi",
+    "prompt": "Using the semantic-model-consumption skill, run a DAX query against the SalesBenchmark semantic model. Execute: EVALUATE ROW(\"TotalSales2023\", CALCULATE([Sales], 'date'[Year] = 2023)). Show me the result.",
+    "expectedSkills": ["semantic-model-consumption"],
+    "expectedResults": ["ExecuteQuery", "363,742,767"]
+  },
+  {
+    "name": "fabriciq-basic",
+    "area": "powerbi",
+    "prompt": "Ask Power BI: what is the total sales for year 2023 in the SalesBenchmark report? Discover the artifact and show me the data.",
+    "expectedSkills": ["fabriciq"],
+    "expectedResults": ["ExecuteQuery", "363,742,767"]
+  },
+  {
+    "name": "eventhouse-consumption-basic-query",
+    "area": "eventhouse",
+    "prompt": "I have a KQL database named SkillsTestEventhouse in the {{WORKSPACE}} workspace in my fabric. How many rows are in the Weather table? Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["eventhouse-consumption-cli"],
+    "expectedResults": ["59,066"]
+  },
+  {
+    "name": "eventhouse-consumption-analytical-query",
+    "area": "eventhouse",
+    "prompt": "I have a KQL database named SkillsTestEventhouse in the {{WORKSPACE}} workspace in my fabric. The Weather table has storm event data with columns like State, EventType, DamageProperty. For each state, find which event type caused the highest total property damage. Then show me the top 3 states by that damage amount along with their most damaging event type. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["eventhouse-consumption-cli"],
+    "expectedResults": ["CALIFORNIA", "Wildfire", "Ice Storm"]
+  },
+  {
+    "name": "eventhouse-authoring-create-table",
+    "area": "eventhouse",
+    "prompt": "In the {{WORKSPACE}} workspace, I need to create a KQL table in my Fabric Eventhouse to store IoT sensor readings. The table should have columns for Timestamp (datetime), DeviceId (string), Temperature (real), Humidity (real), and Location (string). Create an idempotent KQL table definition with a 30-day retention policy. The script should be safe to re-run. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["eventhouse-authoring-cli"],
+    "expectedResults": [".create-merge table", "retention", "idempotent"]
+  },
+  {
+    "name": "semantic-model-refresh",
+    "area": "powerbi",
+    "prompt": "Connect to the semantic model nyctaxi_yellow_directlake in the {{WORKSPACE}} workspace. Trigger a refresh of the model, then retrieve and display its refresh history. If the most recent refresh occurred less than one minute ago, print 'refreshed < 1 min ago.' Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["semantic-model-authoring"],
+    "expectedResults": ["ViaApi", "Completed", "refreshed < 1 min ago"],
+    "flaky": { "githubIssue": "https://github.com/gim-home/skills-for-fabric/issues/312" }
+  },
+  {
+    "name": "dataflows-authoring-create-and-refresh",
+    "area": "dataflows",
+    "prompt": "In the {{WORKSPACE}} workspace, ensure a Dataflow Gen2 named 'eval_smoke_dataflow' exists with **exactly one shared query named 'Query1'** that returns a table with columns Name and Value. If the dataflow already exists with a different shared query name (e.g. SampleData), update its definition so the only shared query is named 'Query1' (rename or replace). Then trigger a refresh on it and poll until it completes. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["dataflows-authoring-cli"],
+    "expectedResults": ["eval_smoke_dataflow", "Dataflow", "refresh"],
+    "flaky": { "githubIssue": "https://github.com/gim-home/skills-for-fabric/issues/132" }
+  },
+  {
+    "name": "dataflows-authoring-list-supported-connection-types",
+    "area": "dataflows",
+    "prompt": "List supportedConnectionTypes for Fabric Dataflow Gen2 connections, find the SQL entry, and tell me which connectionDetails.parameters and credentialDetails.credentials.credentialType values are valid for a cloud SQL connection.",
+    "expectedSkills": ["dataflows-authoring-cli"],
+    "expectedResults": ["supportedConnectionTypes", "credentialType"]
+  },
+  {
+    "name": "dataflows-authoring-preview-mashup-before-save",
+    "area": "dataflows",
+    "prompt": "I'm authoring a Power Query M change to my Dataflow Gen2 in the {{WORKSPACE}} workspace. Before I call updateDefinition, I want to preview the candidate customMashupDocument against the bound connections to make sure the M evaluates correctly. Walk me through the executeQuery preview step and what to inspect in the response before I save. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["dataflows-authoring-cli"],
+    "expectedResults": ["executeQuery", "customMashupDocument", "updateDefinition"]
+  },
+  {
+    "name": "dataflows-consumption-list-and-inspect",
+    "area": "dataflows",
+    "prompt": "List all Dataflows Gen2 in the {{WORKSPACE}} workspace. Then pick any one dataflow and decode its definition to show me the Power Query M mashup code. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["dataflows-consumption-cli"],
+    "expectedResults": ["section Section1", "shared"]
+  },
+  {
+    "name": "dataflows-consumption-query-execution",
+    "area": "dataflows",
+    "prompt": "In the {{WORKSPACE}} workspace, find the Dataflow Gen2 named 'SkillsTestDataflow' and execute the dataflow query named 'Output' (do not pick another query). Parse the Apache Arrow binary response and show me the column names returned. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["dataflows-consumption-cli"],
+    "expectedResults": ["Arrow", "City", "Population"]
+  },
+  {
+    "name": "dataflows-consumption-query-with-custom-m",
+    "area": "dataflows",
+    "prompt": "In the {{WORKSPACE}} workspace, against the Dataflow Gen2 named 'SkillsTestDataflow', run an ad-hoc executeQuery with a customMashupDocument that defines a complete section document containing a shared query named 'AdHoc' returning a table with a column 'k' and values 7, 8, 9. Show me how to parse the Apache Arrow response. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["dataflows-consumption-cli"],
+    "expectedResults": ["executeQuery", "AdHoc", "Arrow"]
+  },
+  {
+    "name": "dataflows-consumption-refresh-history",
+    "area": "dataflows",
+    "prompt": "In the {{WORKSPACE}} workspace, show me the refresh history and last refresh status of the Dataflow Gen2 named 'SkillsTestDataflow', including the start and end times of the most recent run if any. Read-only inspection — do not start a new run. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["dataflows-consumption-cli"],
+    "expectedResults": ["refresh history", "status", "SkillsTestDataflow"]
+  },
+  {
+    "name": "dataflows-authoring-update-definition",
+    "area": "dataflows",
+    "prompt": "In the {{WORKSPACE}} workspace, take the existing Dataflow Gen2 named 'SkillsTestDataflow', decode its current Power Query M, add a new shared query named 'Doubled' that returns a table with a single column 'n' containing the values 2, 4, 6, and persist the change via updateDefinition. Do not trigger a refresh. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["dataflows-authoring-cli"],
+    "expectedResults": ["updateDefinition", "Doubled", "shared"]
+  },
+  {
+    "name": "dataflows-authoring-output-destination-lakehouse",
+    "area": "dataflows",
+    "prompt": "In the {{WORKSPACE}} workspace, create a Dataflow Gen2 named 'eval_od_smoke' with a source query named 'ODTest' that produces a 2-row typed table with columns City (text) and Pop (text). Configure it with an output destination writing to a Lakehouse table in the LSEGDemo lakehouse. Use the DataDestinations annotation with IsNewTarget=true and Automatic settings. Include a hidden _DataDestination query with null-safe navigation and set loadEnabled=false on it. Trigger a refresh with ApplyChangesIfNeeded and poll until it completes. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["dataflows-authoring-cli"],
+    "expectedResults": ["eval_od_smoke", "DataDestination", "Completed", "ApplyChangesIfNeeded"]
+  },
+  {
+    "name": "dataflows-authoring-output-destination-warehouse",
+    "area": "dataflows",
+    "prompt": "In the {{WORKSPACE}} workspace, create a Dataflow Gen2 named 'eval_od_wh_smoke' with a source query producing a typed 2-row table with columns Item (text) and Qty (text). Configure an output destination to the Warehouse in the same workspace (schema dbo) using Fabric.Warehouse connector with warehouseId-based GUID navigation. Use IsNewTarget=true, Automatic settings, and loadEnabled=false on the destination query. Refresh with ApplyChangesIfNeeded and poll until complete. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["dataflows-authoring-cli"],
+    "expectedResults": ["eval_od_wh_smoke", "Warehouse", "Completed"]
+  },
+  {
+    "name": "activator-authoring-create-basic",
+    "area": "activator",
+    "prompt": "In the {{WORKSPACE}} workspace, create an Activator item named 'eval_smoke_activator' with description 'Smoke test activator'. Then confirm the item id. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["activator-authoring-cli"],
+    "expectedResults": ["eval_smoke_activator", "Activator"]
+  },
+  {
+    "name": "activator-consumption-list-baseline",
+    "area": "activator",
+    "prompt": "List all Activator items in the {{WORKSPACE}} workspace and show me the one named 'SkillsTestActivator'. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["activator-consumption-cli"],
+    "expectedResults": ["SkillsTestActivator"]
+  },
+  {
+    "name": "activator-authoring-create-alert-routing",
+    "area": "activator",
+    "prompt": "In the {{WORKSPACE}} workspace, create an alert named 'eval_smoke_temperature_alert' that would notify me when a monitored temperature becomes greater than 30. Only use the specified workspace. If the required source data is missing, explain what source details are needed before authoring the rule. Do NOT search or use any other workspace.",
+    "expectedSkills": ["activator-authoring-cli"],
+    "expectedResults": ["alert", "temperature"]
+  },
+  {
+    "name": "activator-authoring-notify-me-routing",
+    "area": "activator",
+    "prompt": "Notify me when a Fabric workspace event happens in the {{WORKSPACE}} workspace by creating an Activator rule named 'eval_smoke_workspace_event_alert'. Only use the specified workspace. If additional event/action details are required, ask for them explicitly. Do NOT search or use any other workspace.",
+    "expectedSkills": ["activator-authoring-cli"],
+    "expectedResults": ["Activator"]
+  },
+  {
+    "name": "activator-consumption-show-alerts-routing",
+    "area": "activator",
+    "prompt": "Show my alerts in the {{WORKSPACE}} workspace and summarize the Activator items you find. Only use the specified workspace. If none are found, report that clearly. Do NOT search or use any other workspace.",
+    "expectedSkills": ["activator-consumption-cli"],
+    "expectedResults": ["SkillsTestActivator"]
+  },
+  {
+    "name": "activator-consumption-inspect-alert-routing",
+    "area": "activator",
+    "prompt": "Inspect this alert named 'SkillsTestActivator' in the {{WORKSPACE}} workspace and show its Activator item details. Only use the specified workspace. Do NOT search or use any other workspace.",
+    "expectedSkills": ["activator-consumption-cli"],
+    "expectedResults": ["SkillsTestActivator"]
+  },
+  {
+    "name": "dataflows-save-as-authoring-readiness-snapshot",
+    "area": "dataflows",
+    "prompt": "In the {{WORKSPACE}} workspace, use the dataflows save-as authoring flow to assess Gen1 to Gen2 CI/CD readiness and produce a Migration Readiness Snapshot in markdown and JSON. Include risk signal checks (incremental refresh, BYOSA storage, Power Automate triggers, pipeline dependencies, linked entities, DirectQuery), but do not execute migration or refresh. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["dataflows-save-as-authoring-cli"],
+    "expectedResults": ["Migration Readiness Snapshot", "readiness", "risk"]
+  },
+  {
+    "name": "sql-operations-slow-queries",
+    "area": "sqldw",
+    "prompt": "Using the MSSales warehouse in the MSSales workspace on my MSIT Fabric, run a DW slow query analysis from queryinsights and show me the top 5 slowest queries.",
+    "expectedSkills": ["sqldw-operations-cli"],
+    "expectedResults": ["long_running_queries", "elapsed_time"],
+    "flaky": { "githubIssue": "https://github.com/gim-home/skills-for-fabric/issues/133" }
+  },
+  {
+    "name": "synapse-migration-routing",
+    "area": "synapse-migration",
+    "prompt": "I want to migrate a Synapse Analytics workspace to Fabric. The workspace has 2 Spark pools, 5 notebooks, and 3 Spark Job Definitions. Walk me through the migration phases and what needs to happen in each phase.",
+    "expectedSkills": ["synapse-migration"],
+    "expectedResults": ["Phase 0", "Spark Pool", "Environment", "Phase 1", "Phase 2"]
+  },
+  {
+    "name": "synapse-migration-lake-database-routing",
+    "area": "synapse-migration",
+    "prompt": "I need to migrate Synapse Lake Databases to Fabric Lakehouses. The databases have managed and external tables pointing to ADLS Gen2. How do I migrate the metadata and set up shortcuts?",
+    "expectedSkills": ["synapse-migration"],
+    "expectedResults": ["Lake Database", "Lakehouse", "shortcut"]
+  },
+  {
+    "name": "spark-authoring-notebook-code-lakehouse",
+    "area": "spark",
+    "prompt": "Write PySpark code for a Fabric notebook cell that reads a parquet file from the default lakehouse Files folder and displays the first 10 rows.",
+    "expectedSkills": ["spark-authoring-cli"],
+    "expectedResults": ["spark.read", "Files/", "show"],
+    "flaky": { "githubIssue": "https://github.com/gim-home/skills-for-fabric/issues/129" }
+  },
+  {
+    "name": "spark-authoring-notebook-code-notebookutils",
+    "area": "spark",
+    "prompt": "Write notebook code to mount an ADLS Gen2 storage account to a Fabric Spark notebook using notebookutils.",
+    "expectedSkills": ["spark-authoring-cli"],
+    "expectedResults": ["notebookutils", "mount"]
+  },
+  {
+    "name": "spark-authoring-notebook-code-configure",
+    "area": "spark",
+    "prompt": "How do I configure a Fabric Spark notebook session with more memory and enable native execution using %%configure?",
+    "expectedSkills": ["spark-authoring-cli"],
+    "expectedResults": ["%%configure", "driverMemory", "executorMemory"]
+  },
+  {
+    "name": "spark-authoring-notebook-code-sql-crosslh",
+    "area": "spark",
+    "prompt": "Write a %%sql cell to query the 'orders' table in schema 'dbo' from lakehouse 'SalesLH' in workspace 'DataTeam'",
+    "expectedSkills": ["spark-authoring-cli"],
+    "expectedResults": ["%%sql", "DataTeam", "SalesLH", "dbo", "orders"],
+    "flaky": { "githubIssue": "https://github.com/gim-home/skills-for-fabric/issues/130" }
+  },
+  {
+    "name": "spark-authoring-notebook-code-resource-files",
+    "area": "spark",
+    "prompt": "Write notebook code to read a config JSON file from the notebook's builtin resource folder using Spark",
+    "expectedSkills": ["spark-authoring-cli"],
+    "expectedResults": ["notebookutils.nbResPath", "file:", "builtin"],
+    "flaky": { "githubIssue": "https://github.com/gim-home/skills-for-fabric/issues/129" }
+  },
+  {
+    "name": "spark-authoring-notebook-code-runtime-context",
+    "area": "spark",
+    "prompt": "Write notebook code to check if the notebook is running in a pipeline and log the workspace ID",
+    "expectedSkills": ["spark-authoring-cli"],
+    "expectedResults": ["notebookutils.runtime.context", "isForPipeline"],
+    "flaky": { "githubIssue": "https://github.com/gim-home/skills-for-fabric/issues/129" }
+  },
+  {
+    "name": "spark-authoring-notebook-code-connection",
+    "area": "spark",
+    "prompt": "Write notebook code to connect to a PostgreSQL database using Fabric connections",
+    "expectedSkills": ["spark-authoring-cli"],
+    "expectedResults": ["notebookutils.connections", "getCredential"],
+    "flaky": { "githubIssue": "https://github.com/gim-home/skills-for-fabric/issues/129" }
+  },
+  {
+    "name": "spark-authoring-notebook-code-dag",
+    "area": "spark",
+    "prompt": "Write notebook code to run 3 notebooks in parallel then a 4th that depends on all three completing",
+    "expectedSkills": ["spark-authoring-cli"],
+    "expectedResults": ["notebookutils.notebook.runMultiple"]
+  },
+  {
+    "name": "eventstream-authoring-create-basic",
+    "area": "eventstream",
+    "prompt": "Create a new Eventstream called sensor-pipeline in my {{WORKSPACE}} workspace. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["eventstream-authoring-cli"],
+    "expectedResults": []
+  },
+  {
+    "name": "eventstream-authoring-add-source",
+    "area": "eventstream",
+    "prompt": "Add an Azure Event Hub source to my sensor-pipeline Eventstream in {{WORKSPACE}}. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["eventstream-authoring-cli"],
+    "expectedResults": []
+  },
+  {
+    "name": "eventstream-authoring-add-filter",
+    "area": "eventstream",
+    "prompt": "Add a Filter operator to my sensor-pipeline Eventstream that filters events where temperature > 30 in my {{WORKSPACE}} workspace. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["eventstream-authoring-cli"],
+    "expectedResults": []
+  },
+  {
+    "name": "eventstream-authoring-deploy-topology",
+    "area": "eventstream",
+    "prompt": "Deploy an Eventstream called iot-pipeline with a SampleData source, a Filter operator, and a Lakehouse destination writing to raw_events table in my {{WORKSPACE}} workspace. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["eventstream-authoring-cli"],
+    "expectedResults": []
+  },
+  {
+    "name": "eventstream-consumption-list",
+    "area": "eventstream",
+    "prompt": "List all Eventstreams in my {{WORKSPACE}} workspace. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["eventstream-consumption-cli"],
+    "expectedResults": []
+  },
+  {
+    "name": "eventstream-consumption-inspect",
+    "area": "eventstream",
+    "prompt": "Inspect the topology of my sensor-pipeline Eventstream and show me all sources and destinations in my {{WORKSPACE}} workspace. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["eventstream-consumption-cli"],
+    "expectedResults": []
+  },
+  {
+    "name": "eventstream-consumption-health",
+    "area": "eventstream",
+    "prompt": "Check the retention and throughput settings for my sensor-pipeline Eventstream in my {{WORKSPACE}} workspace. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["eventstream-consumption-cli"],
+    "expectedResults": []
+  },
+  {
+    "name": "eventstream-routing-not-eventhouse",
+    "area": "eventhouse",
+    "prompt": "Create a KQL table in my Eventhouse for sensor readings in my {{WORKSPACE}} workspace. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["eventhouse-authoring-cli"],
+    "expectedResults": []
+  },
+  {
+    "name": "search-consumption-find-lakehouse",
+    "area": "search",
+    "prompt": "Find a lakehouse called LSEGDemo in my Fabric tenant. Show me its ID and which workspace it belongs to.",
+    "expectedSkills": ["search-consumption-cli"],
+    "expectedResults": ["LSEGDemo", "{{WORKSPACE}}"],
+    "flaky": { "githubIssue": "https://github.com/gim-home/skills-for-fabric/issues/135" }
+  },
+  {
+    "name": "spark-operations-failed-notebook",
+    "area": "spark",
+    "prompt": "In workspace {{WORKSPACE}}, diagnose the latest failed run for notebook spark_operations_failing_notebook. Retrieve the job instance details and explain the failure reason. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["spark-operations-cli"],
+    "expectedResults": ["Failed"]
+  },
+  {
+    "name": "spark-operations-pipeline-diagnosis",
+    "area": "spark",
+    "prompt": "In workspace {{WORKSPACE}}, diagnose the most recent failed pipeline run and identify which Spark activity caused the failure. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["spark-operations-cli"],
+    "expectedResults": []
+  },
+  {
+    "name": "spark-operations-session-health",
+    "area": "spark",
+    "prompt": "In workspace {{WORKSPACE}}, check Spark Livy session health and identify idle, stuck, or unhealthy sessions. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.",
+    "expectedSkills": ["spark-operations-cli"],
+    "expectedResults": []
+  },
+  {
+    "name": "powerbi-report-planning-basic",
+    "plugin": "powerbi-authoring",
+    "area": "powerbi",
+    "prompt": "Plan a Power BI executive sales report for the semantic model nyctaxi_yellow_directlake in the {{WORKSPACE}} workspace. Do not edit files yet; produce the report requirements, page plan, dependencies, and approval gate.",
+    "expectedSkills": ["powerbi-report-planning"],
+    "expectedResults": ["report", "plan"]
+  },
+  {
+    "name": "powerbi-report-design-brief",
+    "plugin": "powerbi-authoring",
+    "area": "powerbi",
+    "prompt": "Help choosing a Power BI report design archetype for analysts working with a sales overview PBIP.",
+    "expectedSkills": ["powerbi-report-design"],
+    "expectedResults": ["archetype", "layout", "visual"]
+  },
+  {
+    "name": "powerbi-report-authoring-local-pbir",
+    "plugin": "powerbi-authoring",
+    "area": "powerbi",
+    "prompt": "In this local PBIP project, add a Sales Overview report page with KPI cards and a line chart, then validate the PBIR files. Do not publish to Fabric.",
+    "expectedSkills": ["powerbi-report-authoring"],
+    "expectedResults": ["PBIR", "validate", "local"]
+  },
+  {
+    "name": "powerbi-report-management-publish-local-pbip",
+    "plugin": "powerbi-authoring",
+    "area": "powerbi",
+    "prompt": "I have a local SalesDashboard.pbip and want to publish the report to the {{WORKSPACE}} workspace. Walk through the decision points for binding or publishing the semantic model before creating or updating the Fabric report item.",
+    "expectedSkills": ["powerbi-report-management"],
+    "expectedResults": ["workspace", "semantic model", "report"]
+  },
+  {
+    "name": "semantic-model-modify",
+    "plugin": "powerbi-authoring",
+    "area": "powerbi",
+    "prompt": "Apply the naming convention best practices to semantic model 'nyctaxi_yellow_directlake' in the {{WORKSPACE}} workspace.",
+    "expectedSkills": ["semantic-model-authoring"],
+    "expectedResults": ["table_operations", "measure_operations", "column_operations"]
+  },
+  {
+    "name": "semantic-model-create",
+    "plugin": "powerbi-authoring",
+    "area": "powerbi",
+    "prompt": "Create a new semantic model on top of lakehouse 'LSEGDemo' in the {{WORKSPACE}}.",
+    "expectedSkills": ["semantic-model-authoring"],
+    "expectedResults": []
+  },
+  {
+    "name": "semantic-model-set-permissions",
+    "plugin": "powerbi-authoring",
+    "area": "powerbi",
+    "prompt": "List user permissions of semantic model nyctaxi_yellow_directlake in the {{WORKSPACE}}.",
+    "expectedSkills": ["semantic-model-authoring"],
+    "expectedResults": ["az rest", "/users"]
+  }
+]
+

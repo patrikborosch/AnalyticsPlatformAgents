@@ -1,0 +1,9 @@
+inventory:
+- source: DirectOwners
+  items:
+  - id: bocrivat@microsoft.com
+  - id: cristp@microsoft.com
+  - id: saravi@microsoft.com
+  - id: jewang@microsoft.com
+  - id: xuancao@microsoft.com
+  isProduction: false

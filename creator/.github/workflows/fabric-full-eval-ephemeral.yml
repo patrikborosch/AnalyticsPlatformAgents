@@ -1,0 +1,1106 @@
+name: Fabric Full-Eval (Shared Test Tenant)
+
+# Triggered manually (workflow_dispatch) for ad-hoc runs, and nightly via cron
+# at 21:00 UTC daily (3h after smoke) for full-eval regression coverage.
+# Plan chains are dispatched in parallel via the `-ThrottleLimit` knob exposed
+# as the `parallelism` workflow_dispatch input (default 4); expected wall-time
+# is ~30-60min at parallelism=4 (vs 3-5h serial) on a windows-latest runner.
+# The runner creates a fresh workspace + warehouse + lakehouse + eventhouse
+# per run and cleans up on success.
+# Companion docs: docs/ephemeral-tenant-smoke.md + docs/tenant-rotation-runbook.md.
+#
+# Two auth modes are supported (selected automatically by which secrets are set);
+# the gate logic is identical to fabric-smoke-ephemeral.yml.
+#
+# Per-event-source concurrency (see the concurrency: block below): each PR gets
+# its own slot (different PRs run concurrently), and schedule + workflow_dispatch
+# each get their own non-cancelling slot so PR traffic never cancels the nightly.
+# Smoke and full-eval each have their own lane family on the shared ephemeral
+# tenant so a long full-eval run never blocks a fast smoke run (each plan creates
+# its own workspace; no cross-workflow contention at the Fabric resource level).
+
+on:
+  schedule:
+    # 21:00 UTC daily = 00:00 IDT (Israel midnight) = 14:00 PT (US afternoon).
+    # Full-eval runs 3-5h, finishing ~00:00-02:00 UTC = 03:00-05:00 IDT.
+    # Results are visible by Israel morning. Previously 07:00 UTC.
+    # Smoke runs independently at 18:00 UTC under its own concurrency lane
+    # (`fabric-smoke-shared-tenant`) and no longer queues full-eval behind it.
+    - cron: '0 21 * * *'
+  workflow_dispatch:
+    inputs:
+      skip-warehouse:
+        description: 'Skip plans that require a Warehouse item. Useful when capacity is limited.'
+        required: false
+        type: boolean
+        default: false
+      skip-lakehouse:
+        description: 'Skip plans that require a Lakehouse item.'
+        required: false
+        type: boolean
+        default: false
+      skip-cleanup:
+        description: 'Skip Phase 0 cleanup (when the workspace is known to be empty).'
+        required: false
+        type: boolean
+        default: false
+      plan-filter:
+        description: 'Optional comma/semicolon/space-separated list of plan basenames or wildcards to limit which plan files run. PR-touched callers pass exact basenames (e.g. "eval-dataflows-authoring"); per-plugin probe / manual dispatch can pass wildcards (e.g. "eval-probe-*"). Empty = run every discovered plan.'
+        required: false
+        type: string
+        default: ''
+      parallelism:
+        description: 'Max concurrent plan chains. 1 = serial (legacy 3-5h). 4 (default) targets a ~30-60min wall-time on hosted runners.'
+        required: false
+        type: number
+        default: 4
+  # workflow_call surface lets sibling workflows (e.g. fabric-full-eval-pr-touched.yml)
+  # delegate the entire auth + provision + eval + summary pipeline. Outputs let the
+  # caller post a PR comment without duplicating the parsing logic.
+  workflow_call:
+    inputs:
+      skip-warehouse:
+        type: boolean
+        default: false
+      skip-lakehouse:
+        type: boolean
+        default: false
+      skip-cleanup:
+        type: boolean
+        default: false
+      plan-filter:
+        type: string
+        default: ''
+      gate-plan-filter:
+        description: 'Subset of plan basenames the PR-touched hard-fail gate is allowed to fail on (the touched skills plans). Empty = gate over every plan that ran. Differs from plan-filter only on run-all (infra) runs, where all plans run but the gate stays scoped to the PR''s skills.'
+        required: false
+        type: string
+        default: ''
+      parallelism:
+        description: 'Max concurrent plan chains. 1 = serial (legacy 3-5h). 4 (default) targets a ~30-60min wall-time on hosted runners.'
+        required: false
+        type: number
+        default: 4
+      checkout-ref:
+        description: 'Git ref (commit SHA or branch) to check out before running full-eval. Default: github.sha (the commit that triggered this workflow). PR-touched callers should pass github.event.pull_request.head.sha so eval tests the PR HEAD code, not main.'
+        required: false
+        type: string
+        default: ''
+      caller-pr-number:
+        description: 'PR number of the workflow_call caller (e.g. fabric-full-eval-pr-touched.yml). Partitions the shared-tenant concurrency group per PR so different PRs run concurrently and a PR run never cancels the queued nightly. Empty for direct schedule / workflow_dispatch invocations.'
+        required: false
+        type: string
+        default: ''
+      caller-event-name:
+        description: 'Event name of the workflow_call caller. Drives cancel-in-progress: a new push to the same PR cancels that PR''s in-flight run, but schedule / workflow_dispatch runs never cancel each other. Empty for direct invocations; the expression then falls back to github.event_name.'
+        required: false
+        type: string
+        default: ''
+    outputs:
+      auth-ready:
+        description: 'true when the auth gate passed (Phase A or Phase B); false when neither secret bundle is configured.'
+        value: ${{ jobs.full-eval.outputs.auth-ready || 'false' }}
+      auth-mode:
+        description: 'phaseA, phaseB, or skip.'
+        value: ${{ jobs.full-eval.outputs.auth-mode || 'skip' }}
+      total-count:
+        description: 'Number of plans the runner attempted (post -PlanFilter).'
+        value: ${{ jobs.full-eval.outputs.total-count || '0' }}
+      completed-count:
+        description: 'Plans that completed without error.'
+        value: ${{ jobs.full-eval.outputs.completed-count || '0' }}
+      errored-count:
+        description: 'Plans that errored (non-zero exit, parse failures, etc.).'
+        value: ${{ jobs.full-eval.outputs.errored-count || '0' }}
+      bailed-count:
+        description: 'Plans that bailed out (e.g. infrastructure unavailable mid-run).'
+        value: ${{ jobs.full-eval.outputs.bailed-count || '0' }}
+      skipped-count:
+        description: 'Plans skipped via -SkipWarehouse / -SkipLakehouse / -PlanFilter.'
+        value: ${{ jobs.full-eval.outputs.skipped-count || '0' }}
+      test-pass-count:
+        description: 'Number of individual test cases that passed (extracted from eval-results.md Summary table).'
+        value: ${{ jobs.full-eval.outputs.test-pass-count || '0' }}
+      test-fail-count:
+        description: 'Number of individual test cases that failed (extracted from eval-results.md Summary table).'
+        value: ${{ jobs.full-eval.outputs.test-fail-count || '0' }}
+      test-total-count:
+        description: 'Total number of test cases attempted across all plans.'
+        value: ${{ jobs.full-eval.outputs.test-total-count || '0' }}
+      test-pass-rate:
+        description: 'Overall test-level pass rate as a percentage string (e.g. "93.9"). Empty when eval-results.md was not produced.'
+        value: ${{ jobs.full-eval.outputs.test-pass-rate || '' }}
+
+permissions:
+  id-token: write   # required for Phase B (OIDC federation -> UAMI)
+  contents: read
+  issues: write     # required for auto-filing rotation issues on AAD errors
+
+# Split the shared-tenant lock per event source so PR traffic cannot starve the
+# nightly schedule, and so different PRs run concurrently instead of queueing
+# behind one another. Mirrors fabric-smoke-ephemeral.yml (which moved off the
+# static group for the same reasons).
+#
+# Historical bug (the static `fabric-full-eval-shared-tenant` + cancel-in-progress:
+# false this replaces): PR-touched runs invoke this workflow via workflow_call and
+# inherited the same single group, so a PR-touched run arriving in the queue would
+# cancel the PENDING nightly schedule run (GitHub auto-cancels queued runs in the
+# same group regardless of cancel-in-progress, which only protects the RUNNING
+# run). It also serialized every PR's full-eval behind every other PR's.
+#
+# New behaviour: each PR gets its own per-PR queue, schedule has its own slot,
+# workflow_dispatch has its own slot. Per-PR full-eval now runs only the touched
+# skills' plans (see fabric-full-eval-pr-touched.yml detection), so concurrent PR
+# runs are a fraction of a full nightly suite. Workspace names are timestamp-unique
+# so parallel runs never collide; remaining contention is capacity CU headroom on
+# the shared tenant, addressed by adding capacity / per-plan throttle-retry rather
+# than by reintroducing global serialization.
+#
+# Inputs caller-pr-number and caller-event-name are passed explicitly by
+# workflow_call callers (fabric-full-eval-pr-touched.yml). For DIRECT invocations
+# (schedule, workflow_dispatch) both default to empty and the expression falls
+# back to github.event_name ('schedule' / 'workflow_dispatch'). cancel-in-progress
+# is true ONLY for a PR-scoped caller, mirroring the orchestrator's own per-PR
+# cancel-in-progress: a new push to the same PR kills its in-flight run, which we
+# want for PRs but never for schedule or manual dispatch.
+concurrency:
+  group: fabric-full-eval-shared-tenant-${{ inputs.caller-pr-number || github.event.pull_request.number || github.event_name }}
+  cancel-in-progress: ${{ inputs.caller-event-name == 'pull_request_target' || github.event_name == 'pull_request_target' }}
+
+jobs:
+  full-eval:
+    runs-on: windows-latest
+    timeout-minutes: 360   # full-eval can run 2-4h; give a 6h budget before workflow timeout
+    # Outputs propagate via workflow_call to callers (e.g. fabric-full-eval-pr-touched.yml).
+    # auth-* come from steps.gate; counts come from steps.summarise.
+    # Defaults via `|| '...'` are applied because steps.summarise is conditional
+    # (`if: always() && steps.gate.outputs.ready == 'true'`) -- when skipped, its
+    # outputs would be empty strings and callers reading `${{ needs.X.outputs.Y }}`
+    # would get '' instead of the expected '0'.
+    outputs:
+      auth-ready: ${{ steps.gate.outputs.ready || 'false' }}
+      auth-mode: ${{ steps.gate.outputs.mode || 'skip' }}
+      total-count: ${{ steps.summarise.outputs.total-count || '0' }}
+      completed-count: ${{ steps.summarise.outputs.completed-count || '0' }}
+      errored-count: ${{ steps.summarise.outputs.errored-count || '0' }}
+      bailed-count: ${{ steps.summarise.outputs.bailed-count || '0' }}
+      skipped-count: ${{ steps.summarise.outputs.skipped-count || '0' }}
+      test-pass-count: ${{ steps.summarise.outputs.test-pass-count || '0' }}
+      test-fail-count: ${{ steps.summarise.outputs.test-fail-count || '0' }}
+      test-total-count: ${{ steps.summarise.outputs.test-total-count || '0' }}
+      test-pass-rate: ${{ steps.summarise.outputs.test-pass-rate || '' }}
+    steps:
+      # When invoked via workflow_call (e.g. by fabric-full-eval-pr-touched.yml
+      # on a fork PR), the caller may pass `checkout-ref` to test the PR HEAD's
+      # code rather than the base. We pin to a SHA, not a ref name, to defend
+      # against TOCTOU race-swap where the PR HEAD changes between the gate
+      # decision and the checkout fetch.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.checkout-ref || github.sha }}
+
+      # When testing PR HEAD content (caller passed `checkout-ref`), restore
+      # the full-eval INFRASTRUCTURE (runner scripts + telemetry helpers +
+      # setup helpers) from base/main. The PR is allowed to modify the
+      # CONTENT under test (skills/, common/, plugins/, plan/) but not the
+      # test runner itself. Without this, a modified `run-full-tests.ps1` or
+      # `copilot-invoke.ps1` could exfiltrate the secrets materialised by
+      # the Phase A / Phase B steps below (SP cert, OIDC token, KV secrets).
+      # Mirrors the smoke trusted-runner-restore step (see
+      # fabric-smoke-ephemeral.yml ~L148-199) and aligns the trust boundary
+      # with smoke per the Avi review on PR #209.
+      # tests/tests.json is INTENTIONALLY NOT restored: new test entries are
+      # routinely added alongside skill changes (legitimate use), and the
+      # internal trust model accepts that prompt content is contributor-
+      # controlled. If that assumption changes, add tests/tests.json to the
+      # restore list below.
+      #
+      # Truthy check (`if: inputs.checkout-ref`) rather than `!= ''` so
+      # null/undefined inputs.checkout-ref on schedule / workflow_dispatch
+      # runs cleanly skip the restore. The `!= ''` form would evaluate to
+      # true for null (null != '') and fire the restore on cron, which
+      # would silently overwrite legitimate runner changes on main.
+      - name: Restore test infrastructure from default branch
+        if: inputs.checkout-ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          default_branch='${{ github.event.repository.default_branch }}'
+          : "${default_branch:=main}"
+          echo "Restoring test infrastructure from origin/${default_branch}..."
+          git fetch --depth=1 origin "${default_branch}"
+          # Restore each file individually so a missing file (e.g. someone
+          # deleted run-full-tests.ps1 on main) doesn't abort the whole step.
+          # Listed files are the trusted execution surface for full-eval:
+          # anything else is content under test.
+          for f in \
+            tests/run-full-tests.ps1 \
+            tests/run-smoke-tests.ps1 \
+            tests/copilot-invoke.ps1 \
+            tests/copilot-session-telemetry.ps1 \
+            tests/testFabricSkills.ps1 \
+            tests/testdata/setup_test_env.py \
+            tests/select_plans_for_skills.py \
+            tests/coverage_gap_report.py \
+            build/build_plugins.py \
+            .github/scripts/smoke-results-to-schema.ps1 ; do
+            if git cat-file -e "origin/${default_branch}:${f}" 2>/dev/null; then
+              git checkout "origin/${default_branch}" -- "${f}"
+              echo "  Restored: ${f}"
+            else
+              echo "  Skipped (not on base): ${f}"
+            fi
+          done
+          echo
+          echo "Test infrastructure files vs default branch (should be empty -- restored):"
+          git diff --name-only "origin/${default_branch}" -- \
+            tests/run-full-tests.ps1 tests/run-smoke-tests.ps1 \
+            tests/copilot-invoke.ps1 tests/copilot-session-telemetry.ps1 \
+            tests/testFabricSkills.ps1 tests/testdata/setup_test_env.py \
+            tests/select_plans_for_skills.py tests/coverage_gap_report.py \
+            build/build_plugins.py \
+            .github/scripts/smoke-results-to-schema.ps1 \
+            | sed 's/^/  /'
+
+      # -----------------------------------------------------------------
+      # Gate: pick Phase A or Phase B based on which secrets are set.
+      # (Identical logic to fabric-smoke-ephemeral.yml gate step.)
+      # -----------------------------------------------------------------
+      - name: Detect auth mode
+        id: gate
+        env:
+          # Phase A
+          SP_APP_ID: ${{ secrets.SP_APP_ID }}
+          SP_CERT_BASE64: ${{ secrets.SP_CERT_BASE64 }}
+          SP_OBJECT_ID: ${{ secrets.SP_OBJECT_ID }}
+          TENANT_DOMAIN_SECRET: ${{ secrets.TENANT_DOMAIN }}
+          # Copilot CLI auth (required for both phases)
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          # Phase B
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          FABRIC_SMOKE_KV_NAME: ${{ vars.FABRIC_SMOKE_KV_NAME }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$COPILOT_GITHUB_TOKEN" ]; then
+            echo "::warning::COPILOT_GITHUB_TOKEN secret is not configured. Full-eval harness cannot invoke Copilot CLI."
+            echo "mode=skip"  >> "$GITHUB_OUTPUT"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          phaseA_ok=true
+          for v in SP_APP_ID SP_CERT_BASE64 SP_OBJECT_ID TENANT_DOMAIN_SECRET; do
+            if [ -z "${!v}" ]; then phaseA_ok=false; break; fi
+          done
+          phaseB_ok=true
+          for v in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID FABRIC_SMOKE_KV_NAME; do
+            if [ -z "${!v}" ]; then phaseB_ok=false; break; fi
+          done
+          if [ "$phaseA_ok" = "true" ]; then
+            echo "::notice::Using Phase A (direct secrets) auth path."
+            echo "mode=phaseA" >> "$GITHUB_OUTPUT"
+            echo "ready=true"   >> "$GITHUB_OUTPUT"
+          elif [ "$phaseB_ok" = "true" ]; then
+            echo "::notice::Using Phase B (OIDC + Key Vault) auth path."
+            echo "mode=phaseB" >> "$GITHUB_OUTPUT"
+            echo "ready=true"   >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Neither Phase A nor Phase B secrets are configured. Skipping full-eval run."
+            echo "mode=skip"  >> "$GITHUB_OUTPUT"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ───────── Phase A: direct secrets ─────────
+      - name: Phase A — materialise SP cert from secret
+        if: steps.gate.outputs.mode == 'phaseA'
+        shell: bash
+        env:
+          SP_APP_ID: ${{ secrets.SP_APP_ID }}
+          SP_CERT_BASE64: ${{ secrets.SP_CERT_BASE64 }}
+          SP_OBJECT_ID: ${{ secrets.SP_OBJECT_ID }}
+          TENANT_DOMAIN_SECRET: ${{ secrets.TENANT_DOMAIN }}
+        run: |
+          set -euo pipefail
+          PEM_PATH="${RUNNER_TEMP}/sp-cert.pem"
+          # Defensive whitespace strip (CRLF from `gh secret set` via PowerShell pipe).
+          printf '%s' "$SP_CERT_BASE64" | tr -d '\r\n ' | base64 -d > "$PEM_PATH"
+          grep -q "BEGIN PRIVATE KEY\|BEGIN RSA PRIVATE KEY" "$PEM_PATH" || { echo "::error::SP_CERT_BASE64 does not decode to a PEM with a private key"; exit 1; }
+          grep -q "BEGIN CERTIFICATE" "$PEM_PATH" || { echo "::error::SP_CERT_BASE64 does not decode to a PEM with a certificate"; exit 1; }
+          echo "::add-mask::$SP_APP_ID"
+          echo "::add-mask::$SP_OBJECT_ID"
+          {
+            echo "TENANT_DOMAIN=$TENANT_DOMAIN_SECRET"
+            echo "SP_APP_ID=$SP_APP_ID"
+            echo "SP_OBJECT_ID=$SP_OBJECT_ID"
+            echo "SP_CERT_PATH=$PEM_PATH"
+          } >> "$GITHUB_ENV"
+
+      # ───────── Phase B: OIDC + KV ─────────
+      - name: Phase B — Azure login via OIDC -> UAMI
+        if: steps.gate.outputs.mode == 'phaseB'
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id:        ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:        ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Phase B — fetch tenant + SP identifiers from KV
+        if: steps.gate.outputs.mode == 'phaseB'
+        shell: bash
+        env:
+          KV: ${{ vars.FABRIC_SMOKE_KV_NAME }}
+        run: |
+          set -euo pipefail
+          TENANT_ID=$(az keyvault secret show --vault-name "$KV" --name "TENANT-ID"     --query value -o tsv)
+          TENANT_DOMAIN=$(az keyvault secret show --vault-name "$KV" --name "TENANT-DOMAIN" --query value -o tsv)
+          SP_APP_ID=$(az keyvault secret show --vault-name "$KV" --name "SP-APP-ID"      --query value -o tsv)
+          SP_OBJECT_ID=$(az keyvault secret show --vault-name "$KV" --name "SP-OBJECT-ID" --query value -o tsv)
+          CERT_EXPIRY=$(az keyvault secret show --vault-name "$KV" --name "CERT-EXPIRY"  --query value -o tsv)
+          echo "::add-mask::$SP_APP_ID"
+          echo "::add-mask::$SP_OBJECT_ID"
+          {
+            echo "TENANT_ID=$TENANT_ID"
+            echo "TENANT_DOMAIN=$TENANT_DOMAIN"
+            echo "SP_APP_ID=$SP_APP_ID"
+            echo "SP_OBJECT_ID=$SP_OBJECT_ID"
+            echo "CERT_EXPIRY=$CERT_EXPIRY"
+          } >> "$GITHUB_ENV"
+
+      - name: Phase B — download SP cert (PFX from KV -> PEM)
+        if: steps.gate.outputs.mode == 'phaseB'
+        shell: bash
+        env:
+          KV: ${{ vars.FABRIC_SMOKE_KV_NAME }}
+        run: |
+          set -euo pipefail
+          PFX_B64="${RUNNER_TEMP}/sp-cert.b64"
+          PFX_PATH="${RUNNER_TEMP}/sp-cert.pfx"
+          PEM_PATH="${RUNNER_TEMP}/sp-cert.pem"
+          az keyvault secret show --vault-name "$KV" --name "SP-CERT" --query value -o tsv > "$PFX_B64"
+          base64 -d "$PFX_B64" > "$PFX_PATH"
+          openssl pkcs12 -in "$PFX_PATH" -out "$PEM_PATH" -nodes -passin "pass:"
+          rm -f "$PFX_B64" "$PFX_PATH"
+          echo "SP_CERT_PATH=$PEM_PATH" >> "$GITHUB_ENV"
+
+      # ───────── Common steps ─────────
+      - name: Setup Python (for setup_test_env.py and any plan helpers)
+        if: steps.gate.outputs.ready == 'true'
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        if: steps.gate.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install pyarrow
+
+      - name: Setup Node (for Copilot CLI)
+        if: steps.gate.outputs.ready == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Install Copilot CLI (inline npm — enterprise allow-list deferred)
+        if: steps.gate.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g @github/copilot@1.0.50
+          copilot --version
+
+      - name: Install sqlcmd (go-sqlcmd, for plans hitting Fabric SQL endpoint)
+        if: steps.gate.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          choco install sqlcmd -y --no-progress
+          which sqlcmd
+
+      # Orphan-FullEval-workspace sweep. Runs ONLY on scheduled cron (so we
+      # don't slow PR-touched runs). The PR-touched workflow uses
+      # cancel-in-progress: true on its per-PR concurrency group, which
+      # means a mid-step cancellation can skip the script's workspace-
+      # delete phase and strand a `FullEval-*` workspace on the tenant.
+      # This step provides a 24h safety net: any workspace whose name
+      # matches `FullEval-YYYYMMDDHHmmss` and whose timestamp is older
+      # than 24h is deleted. 24h is generous -- in-flight nightlies + the
+      # longest expected plan combine well under that.
+      - name: Sweep orphaned FullEval workspaces (nightly only)
+        if: steps.gate.outputs.ready == 'true' && github.event_name == 'schedule'
+        shell: pwsh
+        env:
+          # Only AUTH_MODE needs to be expanded from a steps.* output (it's not
+          # in $GITHUB_ENV). The other three (TENANT_DOMAIN / SP_APP_ID /
+          # SP_CERT_PATH) come from $GITHUB_ENV writes earlier in the job
+          # (Phase A: materialise SP cert from secret; Phase B: KV fetch +
+          # SP cert download) and are already visible as $env:* in the run
+          # block below -- re-exposing them via ${{ env.* }} here would be
+          # redundant and risks overriding the runner env with an empty
+          # string if the expression ever fails to resolve.
+          AUTH_MODE: ${{ steps.gate.outputs.mode }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The orphan sweep runs BEFORE the runner step that does `az login`
+          # inside tests/run-full-tests.ps1. We must establish an az session
+          # here so `az account get-access-token` succeeds. Phase A path: log
+          # in as the SP with the cert that the materialise step wrote to
+          # $env:SP_CERT_PATH. Phase B path: azure/login@v2 already set up
+          # an `az` session via OIDC -> UAMI earlier in the job, so no extra
+          # login is needed.
+          if ($env:AUTH_MODE -eq 'phaseA') {
+            $tenant = ($env:TENANT_DOMAIN ?? "").Trim()
+            $spAppId = ($env:SP_APP_ID ?? "").Trim()
+            $spCertPath = ($env:SP_CERT_PATH ?? "").Trim()
+            if (-not $tenant -or -not $spAppId -or -not $spCertPath) {
+              Write-Error "Phase A sweep prerequisites missing (TENANT_DOMAIN/SP_APP_ID/SP_CERT_PATH). Cannot establish az session; failing the orphan sweep step."
+              exit 1
+            }
+            Write-Host "Orphan sweep: Phase A detected. Logging in as SP $spAppId (tenant $tenant) for the sweep only."
+            az login --service-principal --tenant $tenant --username $spAppId --certificate $spCertPath --allow-no-subscriptions | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "Orphan sweep SP login failed (LASTEXITCODE=$LASTEXITCODE). Cannot continue."
+              exit 1
+            }
+          } else {
+            Write-Host "Orphan sweep: Phase B detected. Reusing OIDC -> UAMI az session from azure/login@v2."
+          }
+          $token = az account get-access-token --resource 'https://api.fabric.microsoft.com' --query accessToken -o tsv
+          if (-not $token) { Write-Error 'Failed to get Fabric access token for orphan sweep'; exit 1 }
+          $headers = @{ Authorization = "Bearer $token"; 'Content-Type' = 'application/json' }
+          $cutoff = (Get-Date).ToUniversalTime().AddHours(-24)
+          Write-Host "Orphan sweep: cutoff = $($cutoff.ToString('o')) UTC. Listing workspaces (with continuationToken pagination)..."
+          # Paginate via Fabric's continuationToken so we see every workspace,
+          # not just the first page. On tenants with many workspaces, page 1
+          # easily misses older FullEval-* candidates and the safety net leaks.
+          $candidates = @()
+          $pageCount = 0
+          $continuation = $null
+          do {
+            $uri = 'https://api.fabric.microsoft.com/v1/workspaces'
+            if ($continuation) {
+              # The Fabric SDK expects the raw token URL-encoded; PowerShell's
+              # Uri builder takes care of '+' and '/' inside the token.
+              $encoded = [System.Net.WebUtility]::UrlEncode($continuation)
+              $uri = "$uri`?continuationToken=$encoded"
+            }
+            $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method GET
+            $pageCount++
+            $pageMatches = @($resp.value | Where-Object { $_.displayName -like 'FullEval-*' })
+            $candidates += $pageMatches
+            Write-Host "  Page ${pageCount}: $($resp.value.Count) workspace(s), $($pageMatches.Count) FullEval-* candidate(s)."
+            $continuation = $resp.continuationToken
+          } while ($continuation)
+          Write-Host "Found $($candidates.Count) FullEval-* workspace(s) across $pageCount page(s)."
+          $swept = 0
+          $kept = 0
+          foreach ($ws in $candidates) {
+            # Parse FullEval-yyyyMMddHHmmss timestamp from the name.
+            $stamp = $ws.displayName -replace '^FullEval-', ''
+            $parsed = [DateTime]::MinValue
+            $ok = [DateTime]::TryParseExact($stamp, 'yyyyMMddHHmmss', $null, [System.Globalization.DateTimeStyles]::AssumeUniversal, [ref]$parsed)
+            if (-not $ok) {
+              Write-Host "  KEEP (unparseable name): $($ws.displayName) [$($ws.id)]"
+              $kept++
+              continue
+            }
+            $parsedUtc = $parsed.ToUniversalTime()
+            if ($parsedUtc -lt $cutoff) {
+              Write-Host "  DELETE (orphan, age $((New-TimeSpan -Start $parsedUtc -End (Get-Date).ToUniversalTime()).TotalHours | ForEach-Object { '{0:F1}h' -f $_ })): $($ws.displayName) [$($ws.id)]"
+              try {
+                Invoke-RestMethod -Uri "https://api.fabric.microsoft.com/v1/workspaces/$($ws.id)" -Headers $headers -Method DELETE | Out-Null
+                $swept++
+              } catch {
+                Write-Warning "  Delete failed for $($ws.id): $($_.Exception.Message)"
+              }
+            } else {
+              Write-Host "  KEEP (under 24h): $($ws.displayName) [$($ws.id)]"
+              $kept++
+            }
+          }
+          Write-Host "Orphan sweep done. Swept=$swept Kept=$kept"
+
+      - name: Build plugin (materialize skills)
+        if: steps.gate.outputs.ready == 'true'
+        shell: bash
+        run: python build/build_plugins.py
+
+      - name: Run full-eval as service principal
+        if: steps.gate.outputs.ready == 'true'
+        shell: pwsh
+        env:
+          FULL_EVAL_DIR: ${{ runner.temp }}/full-eval-results
+          # inputs.* is empty when triggered by `schedule` (cron); the `|| 'false'`
+          # fallbacks ensure the boolean envs are set correctly in both trigger paths.
+          SKIP_WAREHOUSE: ${{ inputs.skip-warehouse || 'false' }}
+          SKIP_LAKEHOUSE: ${{ inputs.skip-lakehouse || 'false' }}
+          SKIP_CLEANUP: ${{ inputs.skip-cleanup || 'false' }}
+          # PR-touched callers pass exact basenames (auto-narrowed by
+          # tests/select_plans_for_skills.py); per-plugin probe / manual
+          # dispatch can pass wildcards. Schedule leaves this empty to
+          # run every plan.
+          PLAN_FILTER: ${{ inputs.plan-filter || '' }}
+          # Pass the raw input through without `|| '4'` fallback so that an
+          # explicit `parallelism: 0` is NOT silently rewritten to 4 (the GitHub
+          # expression `||` treats 0 as falsy, which would bypass the >= 1
+          # validation in run-full-tests.ps1). On schedule, inputs.parallelism is
+          # empty -- the PowerShell step defaults to 4 for an empty env value and
+          # validates any non-empty value via [int]::TryParse + the >= 1 check.
+          PARALLELISM: ${{ inputs.parallelism }}
+          # Optional: pin full-eval to a specific Fabric capacity (skips discovery).
+          # Set repo variable FABRIC_CAPACITY_ID to a capacity GUID that the CI SP has
+          # Contributor (or Admin) access to. When unset, falls back to discovery.
+          # See docs/ephemeral-tenant-smoke.md ("Pinned capacity") for the grant procedure.
+          FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
+          # Copilot CLI reads this env var first (priority over GH_TOKEN/GITHUB_TOKEN).
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:FULL_EVAL_DIR | Out-Null
+
+          # Defensive trim — secrets/env values can pick up stray whitespace from
+          # the GH secret-set pipe path (PowerShell CRLF). AADSTS90002 / "tenant not
+          # found" is the canonical failure mode if these are not trimmed.
+          $tenantDomain = ($env:TENANT_DOMAIN ?? "").Trim()
+          $spAppId      = ($env:SP_APP_ID ?? "").Trim()
+          $spCertPath   = ($env:SP_CERT_PATH ?? "").Trim()
+          $spObjectId   = ($env:SP_OBJECT_ID ?? "").Trim()
+          if (-not $tenantDomain) { Write-Error "TENANT_DOMAIN env var is empty after trim"; exit 1 }
+          if (-not $spAppId)      { Write-Error "SP_APP_ID env var is empty after trim";      exit 1 }
+          if (-not $spCertPath)   { Write-Error "SP_CERT_PATH env var is empty after trim";   exit 1 }
+          if (-not $spObjectId)   { Write-Error "SP_OBJECT_ID env var is empty after trim";   exit 1 }
+
+          # Build the runner argument list. Switch params (-SkipWarehouse / -SkipLakehouse / -SkipCleanup)
+          # are conditionally added based on workflow inputs.
+          $runnerArgs = @{
+              tenant      = $tenantDomain
+              spLogin     = $spAppId
+              spCertPath  = $spCertPath
+              spObjectId  = $spObjectId
+              TestFolder  = $env:FULL_EVAL_DIR
+          }
+          if ($env:SKIP_WAREHOUSE -eq 'true') { $runnerArgs['SkipWarehouse'] = $true }
+          if ($env:SKIP_LAKEHOUSE -eq 'true') { $runnerArgs['SkipLakehouse'] = $true }
+          if ($env:SKIP_CLEANUP   -eq 'true') { $runnerArgs['SkipCleanup']   = $true }
+          # Optional plan filter -- exact basenames from the PR-touched
+          # orchestrator, OR wildcards from per-plugin probe / dispatch.
+          # Trim because the GH env-set path can leave stray whitespace
+          # on empty inputs; whitespace-only = no filter (run all).
+          $planFilterRaw = $env:PLAN_FILTER ?? ""
+          $planFilter = $planFilterRaw.Trim()
+          if ($planFilter) { $runnerArgs['PlanFilter'] = $planFilter }
+
+          # FABRIC_CAPACITY_ID is OPTIONAL. When set, pins full-eval to that capacity
+          # and skips capacity discovery. Trim before checking so the empty default
+          # from an unset repo variable does not produce a "no active capacity"
+          # error inside run-full-tests.ps1 via an unintended -capacityId ''. A
+          # whitespace-only value is treated as a misconfiguration and fails fast.
+          $capacityIdRaw = $env:FABRIC_CAPACITY_ID ?? ""
+          $capacityIdPin = $capacityIdRaw.Trim()
+          if ($capacityIdRaw -and -not $capacityIdPin) {
+              Write-Error "FABRIC_CAPACITY_ID is set but contains only whitespace. Either set a valid capacity GUID or unset the repo variable."
+              exit 1
+          }
+          if ($capacityIdPin) { $runnerArgs['capacityId'] = $capacityIdPin }
+
+          # PARALLELISM controls -ThrottleLimit on the orchestrator. Default 4 mirrors
+          # the run-full-tests.ps1 default; non-integer values fall back to 4 with a
+          # warning so a scheduled run cannot be silently degraded by a typo'd input.
+          $parallelismValue = 4
+          if ($env:PARALLELISM) {
+              if (-not [int]::TryParse($env:PARALLELISM, [ref]$parallelismValue)) {
+                  Write-Warning "PARALLELISM env value '$env:PARALLELISM' is not an integer; defaulting to 4."
+                  $parallelismValue = 4
+              }
+          }
+          $runnerArgs['ThrottleLimit'] = $parallelismValue
+          Write-Host "Running with ThrottleLimit=$parallelismValue (parallel chains)"
+
+          # Tee streaming output to a known log path; downstream summary + rotation
+          # detector parse it.
+          ./tests/run-full-tests.ps1 @runnerArgs 2>&1 |
+              Tee-Object -FilePath "$env:FULL_EVAL_DIR/full-eval-run.log"
+
+      # -----------------------------------------------------------------
+      # Summary: parse eval-run-telemetry.json + the merged eval-results.md
+      # produced by run-full-tests.ps1. Surfaces per-plan status + duration
+      # to the workflow log and $GITHUB_STEP_SUMMARY.
+      # -----------------------------------------------------------------
+      - name: Summarise full-eval results
+        id: summarise
+        if: always() && steps.gate.outputs.ready == 'true'
+        shell: pwsh
+        env:
+          # Subset of plan basenames the PR-touched gate may hard-fail on.
+          # Empty on cron / dispatch / pure-infra PRs -> scoped counts are not
+          # emitted and the gate uses whole-suite counts (current behaviour).
+          GATE_PLAN_FILTER: ${{ inputs.gate-plan-filter }}
+        run: |
+          # Emit zero-valued counts up-front so that even the missing/malformed
+          # telemetry exits (which `exit 1` below) leave non-empty outputs for
+          # any caller reading them under `always()`. Later happy-path block
+          # overwrites with real values.
+          "total-count=0"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "completed-count=0" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "errored-count=0"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "bailed-count=0"    | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "skipped-count=0"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          # Scoped-gate placeholders (overwritten below when GATE_PLAN_FILTER set).
+          "gate-scoped=false"        | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "gate-total-count=0"       | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "gate-completed-count=0"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "gate-skipped-count=0"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "gate-plan-fail-count=0"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "gate-test-fail-count=0"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          # run-full-tests.ps1 writes the canonical eval-run-telemetry.json to
+          # $GITHUB_WORKSPACE/tests/full-eval-tests/result/ (see $evalSource +
+          # $resultDest in the runner). Copies may also exist under $RUNNER_TEMP
+          # because the runner copies the eval framework into $TestFolder and
+          # Copilot writes its own working copies there. Search both roots and
+          # take the most recently written file. Searching only $RUNNER_TEMP --
+          # as the original implementation did -- always missed the canonical
+          # telemetry and produced the misleading "runner crashed before first
+          # plan started" error even when the eval completed all plans cleanly.
+          $temp = $env:RUNNER_TEMP
+          $wsResult = if ($env:GITHUB_WORKSPACE) { Join-Path $env:GITHUB_WORKSPACE "tests/full-eval-tests/result" } else { $null }
+          $searchRoots = @()
+          if ($temp -and (Test-Path $temp)) { $searchRoots += $temp }
+          if ($wsResult -and (Test-Path $wsResult)) { $searchRoots += $wsResult }
+          $telemetryFiles = @()
+          foreach ($root in $searchRoots) {
+              $telemetryFiles += Get-ChildItem $root -Recurse -Filter "eval-run-telemetry.json" -ErrorAction SilentlyContinue
+          }
+          $telemetryFiles = $telemetryFiles | Sort-Object LastWriteTime -Descending
+          if (-not $telemetryFiles) {
+              # Missing telemetry = the runner crashed before writing any (e.g. capacity
+              # 429 after az login, AAD hiccup, setup_test_env.py ImportError, plugin
+              # build failure). The workflow already fails via the runner step's exit
+              # code, but the per-plan summary table would be empty and the only signal
+              # would be a buried warning. Promote to step error + visible summary stub
+              # so morning triage cannot miss this case.
+              $rootsStr = if ($searchRoots.Count -gt 0) { $searchRoots -join ', ' } else { '(no search roots existed)' }
+              $msg = "No eval-run-telemetry.json found under $rootsStr - full-eval runner did not produce telemetry (likely crashed before first plan started)."
+              Write-Host "::error::$msg"
+              $stub = "## Full-eval results`n`n**Telemetry missing.** $msg`n`nSee the ``Run full-eval as service principal`` step for the actual failure.`n"
+              $stub | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              exit 1
+          }
+          $latest = $telemetryFiles[0]
+          Write-Host "Reading telemetry from: $($latest.FullName)"
+          try {
+              $telemetry = Get-Content $latest.FullName -Raw | ConvertFrom-Json
+          } catch {
+              # Same shape as the missing-telemetry case above. Malformed telemetry
+              # means partial-write on crash; promote to error + visible summary stub
+              # so it does not silently disappear into a warning annotation.
+              $msg = "Failed to parse eval-run-telemetry.json - $_"
+              Write-Host "::error::$msg"
+              $stub = "## Full-eval results`n`n**Telemetry malformed.** $msg`n`nSee the ``Run full-eval as service principal`` step for the actual failure.`n"
+              $stub | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              exit 1
+          }
+
+          $plans = @($telemetry.plans)
+          # Bucket plan statuses. The runner emits:
+          #   - completed                     : plan ran end-to-end and produced a result file
+          #   - completed_missing_result      : plan exited 0 but no result file -> structural test-infra failure
+          #   - error                         : plan exited non-zero
+          #   - bailed_out                    : suite-level bailout
+          #   - chain_failed                  : ThreadJob crashed mid-chain (session-telemetry helper missing, etc.)
+          #   - skipped*                      : opt-out (-SkipWarehouse / -SkipLakehouse / -PlanFilter / skipped_bailout)
+          # The gate must count chain_failed + completed_missing_result as
+          # failures alongside error + bailed_out -- they signal infrastructure
+          # regressions the PR caused, even though no individual plan errored.
+          $completed = @($plans | Where-Object { $_.status -eq 'completed' }).Count
+          $errored   = @($plans | Where-Object { $_.status -eq 'error' -or $_.status -eq 'chain_failed' -or $_.status -eq 'completed_missing_result' }).Count
+          $bailed    = @($plans | Where-Object { $_.status -eq 'bailed_out' }).Count
+          $skipped   = @($plans | Where-Object { $_.status -like 'skipped*' }).Count
+
+          # Extract test-level metrics from eval-results.md (parsed below for the
+          # step-summary table). Plan-level "completed" only means the runner
+          # finished the plan; a plan with internal test regressions (e.g. 8/10
+          # PASS) still shows completed, so the gate needs the test-level signal
+          # too. We surface zero placeholders here so $GITHUB_OUTPUT always has
+          # the keys; the eval-results.md parse below overwrites with real values
+          # when the merged-summary file is present.
+          $testPassCount = 0
+          $testFailCount = 0
+          $testTotalCount = 0
+          $testPassRate = ''
+
+          # Surface counts as job-level outputs so workflow_call consumers can compose
+          # PR comments / Slack messages without re-parsing telemetry.
+          "total-count=$($plans.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "completed-count=$completed"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "errored-count=$errored"      | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "bailed-count=$bailed"        | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "skipped-count=$skipped"      | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          # ----- Scoped-gate counts (PR-touched run-all scoping) ---------------
+          # When the caller passes gate-plan-filter (the touched skills' plans),
+          # compute plan-level + test-level fail counts over ONLY those plans.
+          # The PR-touched gate uses these so an environmental bail in an
+          # unrelated plan -- surfaced only because an infra change escalated to
+          # run-all -- does not block the PR. The full counts above are left
+          # untouched so the PR comment + outputs still report the whole run.
+          $gateFilterRaw = "$env:GATE_PLAN_FILTER"
+          $scopeList = @($gateFilterRaw -split '[,; ]+' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          if ($scopeList.Count -gt 0) {
+              $scopedPlans = @($plans | Where-Object { $scopeList -contains $_.plan })
+              $presentPlanNames = @($scopedPlans | ForEach-Object { $_.plan })
+              # A requested scoped plan that produced NO telemetry row (e.g. a
+              # chain stopped at the suite soft budget, or a selector/runner
+              # mismatch) must count as a failure -- otherwise the scoped gate
+              # would vacuously PASS on missing data. So gTotal is the REQUESTED
+              # scope size (not just the rows that happen to be present), which
+              # rolls any missing scoped plan into gPlanFail below.
+              $gMissing   = @($scopeList | Where-Object { $presentPlanNames -notcontains $_ }).Count
+              $gTotal     = $scopeList.Count
+              $gCompleted = @($scopedPlans | Where-Object { $_.status -eq 'completed' }).Count
+              $gSkipped   = @($scopedPlans | Where-Object { $_.status -like 'skipped*' }).Count
+              $gPlanFail  = $gTotal - $gCompleted - $gSkipped
+              if ($gPlanFail -lt 0) { $gPlanFail = 0 }
+              # Test-level scoped fail: sum per-plan FAIL from telemetry
+              # result.statusCounts (null on bailed/errored plans with no result
+              # file -- those are already counted at plan level).
+              $gTestFail = 0
+              foreach ($p in $scopedPlans) {
+                  if ($p.result -and $p.result.statusCounts -and $null -ne $p.result.statusCounts.FAIL) {
+                      $gTestFail += [int]$p.result.statusCounts.FAIL
+                  }
+              }
+              "gate-scoped=true"                 | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+              "gate-total-count=$gTotal"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+              "gate-completed-count=$gCompleted" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+              "gate-skipped-count=$gSkipped"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+              "gate-plan-fail-count=$gPlanFail"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+              "gate-test-fail-count=$gTestFail"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+              Write-Host "  Gate scope ($($scopeList.Count) plan(s)): $gCompleted/$gTotal completed, $gSkipped skipped, $gMissing missing-from-telemetry, $gPlanFail plan-fail, $gTestFail test-fail [scope: $($scopeList -join ', ')]"
+          } elseif (-not [string]::IsNullOrWhiteSpace($gateFilterRaw)) {
+              # Non-blank filter that parsed to zero plan names (e.g. ",," or ";"):
+              # do NOT emit gate-scoped=true with gTotal=0 -- that would make the
+              # gate trivially pass. Leave gate-scoped=false so the gate step
+              # falls back to whole-suite counts.
+              Write-Host "::warning::GATE_PLAN_FILTER='$gateFilterRaw' parsed to 0 plan names; falling back to whole-suite gating (gate-scoped stays false)."
+          }
+
+          Write-Host "--------------------------------------------------------------------"
+          Write-Host "  Full-eval summary: $completed completed, $errored errored, $bailed bailed, $skipped skipped (of $($plans.Count) plans)"
+          Write-Host "--------------------------------------------------------------------"
+
+          $sumLines = @()
+          $sumLines += "## Full-eval results"
+          $sumLines += ""
+          $sumLines += "| Metric | Value |"
+          $sumLines += "|---|---|"
+          $sumLines += "| Plans total | $($plans.Count) |"
+          $sumLines += "| Completed | $completed |"
+          $sumLines += "| Errored | $errored |"
+          $sumLines += "| Bailed out | $bailed |"
+          $sumLines += "| Skipped | $skipped |"
+          $sumLines += ""
+          $sumLines += "## Per-plan detail"
+          $sumLines += ""
+          $sumLines += "| Plan | Status | Duration (s) | Notes |"
+          $sumLines += "|---|---|---:|---|"
+          foreach ($p in $plans) {
+              $notes = if ($p.error) { "$($p.error -replace '\|','/')".Substring(0, [Math]::Min(120, "$($p.error)".Length)) } else { '' }
+              $sumLines += "| $($p.plan) | $($p.status) | $($p.durationSeconds) | $notes |"
+          }
+          $sumLines += ""
+
+          # ----- Test-level pass-rate breakdown ---------------------------------
+          # Telemetry above is *plan-level* (did the runner finish each plan).
+          # The *test-level* pass rate (e.g. "170 PASS / 11 FAIL / 6 ERROR = 93.9%")
+          # lives in eval-results.md, written by the merged-summary phase of
+          # run-full-tests.ps1. Locate the same way as telemetry (workspace
+          # canonical location first, RUNNER_TEMP working copies as fallback)
+          # and inline its ## Summary section so triage can read pass rate
+          # directly from the run page without downloading the artifact.
+          $resultsFiles = @()
+          foreach ($root in $searchRoots) {
+              $resultsFiles += Get-ChildItem $root -Recurse -Filter "eval-results.md" -ErrorAction SilentlyContinue
+          }
+          $resultsFiles = $resultsFiles | Sort-Object LastWriteTime -Descending
+          if ($resultsFiles) {
+              $resultsPath = $resultsFiles[0].FullName
+              Write-Host "Reading test-level results from: $resultsPath"
+              $resultsContent = Get-Content $resultsPath -Raw
+              # Extract the "## Summary" section -- spans until the next H2.
+              $summaryMatch = [regex]::Match($resultsContent, '(?ms)^## Summary\b.*?(?=^## (?!#)|\z)')
+              if ($summaryMatch.Success) {
+                  $sumLines += "## Test-level pass-rate breakdown"
+                  $sumLines += ""
+                  $sumLines += "_From ``$resultsPath`` (eval-results.md ## Summary section). Plan-level table above shows whether the runner finished; this table shows what fraction of tests inside each plan passed._"
+                  $sumLines += ""
+                  # Strip the leading "## Summary" heading so we do not double-render it.
+                  $summaryBody = $summaryMatch.Value -replace '^## Summary\s*\r?\n', ''
+                  # Demote any H3s inside (### Individual Skills etc.) to H4 so they
+                  # nest under our new H2 cleanly in the rendered step-summary tree.
+                  $summaryBody = $summaryBody -replace '(?m)^### ', '#### '
+                  $sumLines += $summaryBody.TrimEnd()
+                  $sumLines += ""
+                  # Pull the headline pass-rate for the console log + a workflow notice.
+                  $overallMatch = [regex]::Match($resultsContent, 'Overall Pass Rate:\s*([\d.]+)%')
+                  if ($overallMatch.Success) {
+                      $overallRate = $overallMatch.Groups[1].Value
+                      $testPassRate = $overallRate
+                      Write-Host "--------------------------------------------------------------------"
+                      Write-Host "  Test-level Overall Pass Rate: ${overallRate}% (from eval-results.md)"
+                      Write-Host "--------------------------------------------------------------------"
+                      Write-Host "::notice title=Full-eval pass rate::${overallRate}% test-level (see step summary for per-skill breakdown)"
+                  }
+                  # Pull per-status totals so the gate + PR comment can fail on internal
+                  # test regressions even when every plan completes. Matches the "Total |
+                  # <N>" / "Pass | <N>" / "Fail | <N>" rows the merged-summary emits.
+                  $totalMatch = [regex]::Match($resultsContent, '(?im)^\s*\|\s*Total\s*\|\s*(\d+)\s*\|')
+                  $passMatch  = [regex]::Match($resultsContent, '(?im)^\s*\|\s*Pass\s*\|\s*(\d+)\s*\|')
+                  $failMatch  = [regex]::Match($resultsContent, '(?im)^\s*\|\s*Fail\s*\|\s*(\d+)\s*\|')
+                  if ($totalMatch.Success) { $testTotalCount = [int]$totalMatch.Groups[1].Value }
+                  if ($passMatch.Success)  { $testPassCount  = [int]$passMatch.Groups[1].Value }
+                  if ($failMatch.Success)  { $testFailCount  = [int]$failMatch.Groups[1].Value }
+              } else {
+                  Write-Host "::warning::Found eval-results.md at $resultsPath but could not locate a ## Summary section."
+              }
+          } else {
+              # Not fatal -- telemetry-only summary is still useful, and the
+              # merged-summary phase may have bailed (or been disabled in a
+              # narrow-scope dispatch). Surface as a workflow notice so triage
+              # knows the test-level rollup is missing.
+              Write-Host "::notice::eval-results.md not found under $($searchRoots -join ', '); step summary will show plan-level metrics only."
+          }
+          # ---------------------------------------------------------------------
+
+          $sumLines -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          # Emit the test-level counts so callers (PR comment + gate) can act on
+          # internal test regressions, not just plan-level completion.
+          "test-pass-count=$testPassCount"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "test-fail-count=$testFailCount"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "test-total-count=$testTotalCount" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "test-pass-rate=$testPassRate"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Detect tenant-rotation errors + auto-file issue
+        if: steps.gate.outputs.ready == 'true' && failure()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          # Promote FULL_EVAL_DIR to step level (it's defined per-step on "Run full-eval"
+          # but not visible here). Without this, the direct path check below silently
+          # misses the log file every time, and only the recursive walk catches it.
+          FULL_EVAL_DIR: ${{ runner.temp }}/full-eval-results
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const evalDir = process.env.FULL_EVAL_DIR || process.env.RUNNER_TEMP;
+            const collected = [];
+            try {
+              const evalLog = path.join(evalDir, 'full-eval-run.log');
+              if (fs.existsSync(evalLog)) {
+                collected.push(fs.readFileSync(evalLog, 'utf8'));
+              }
+              const walk = (dir) => {
+                if (!dir || !fs.existsSync(dir)) return;
+                for (const name of fs.readdirSync(dir, { withFileTypes: true })) {
+                  const full = path.join(dir, name.name);
+                  if (name.isDirectory()) {
+                    walk(full);
+                  } else if (name.name.endsWith('.log') || name.name === 'eval-run-telemetry.json') {
+                    try { collected.push(fs.readFileSync(full, 'utf8')); } catch {}
+                  }
+                }
+              };
+              walk(process.env.RUNNER_TEMP);
+              // Also walk the canonical workspace result dir -- run-full-tests.ps1
+              // writes eval-run-telemetry.json there (under $GITHUB_WORKSPACE), so
+              // a RUNNER_TEMP-only walk misses the authoritative copy and would
+              // skip rotation-code detection on full runs.
+              if (process.env.GITHUB_WORKSPACE) {
+                walk(path.join(process.env.GITHUB_WORKSPACE, 'tests', 'full-eval-tests', 'result'));
+              }
+            } catch {}
+            const logSnippet = collected.join('\n---\n').slice(-4000);
+            const aadCodes = ['AADSTS50034', 'AADSTS700016', 'AADSTS900561', 'AADSTS50020'];
+            const matched = aadCodes.filter(c => logSnippet.includes(c));
+            if (matched.length === 0) {
+              core.notice('No AAD rotation codes detected; skipping rotation-issue filing.');
+              return;
+            }
+            const runUrl     = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const runbookUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/blob/main/docs/tenant-rotation-runbook.md`;
+            const title = `[chore] Fabric Shared Test Tenant: rotation detected from full-eval (${matched.join(', ')})`;
+            const body  = [
+              `## Auto-filed by Fabric Full-Eval (Shared Test Tenant) workflow`,
+              ``,
+              `**Workflow run:** ${runUrl}`,
+              `**Tenant ID currently in env:** \`${process.env.TENANT_ID || 'unknown'}\``,
+              `**Expected expiry:** ${process.env.CERT_EXPIRY || 'unknown'}`,
+              `**AAD error code(s):** ${matched.join(', ')}`,
+              ``,
+              `## What to do`,
+              ``,
+              `Follow [docs/tenant-rotation-runbook.md](${runbookUrl}).`,
+              ``,
+              `## Log excerpt (last 4 KB)`,
+              ``,
+              '```',
+              logSnippet,
+              '```',
+            ].join('\n');
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              state: 'open',
+              labels: 'fabric-tenant-rotation,auto-filed',
+            });
+            const issueAssignees = ['mschaumberg_microsoft'];
+            const createIssue = async (assignees) => {
+              return github.rest.issues.create({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                title,
+                body,
+                labels: ['fabric-tenant-rotation', 'auto-filed', 'chore'],
+                assignees,
+              });
+            };
+            if (existing.data.length > 0) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                issue_number: existing.data[0].number,
+                title,
+                body,
+              });
+              core.notice(`Updated existing rotation issue #${existing.data[0].number}`);
+            } else {
+              try {
+                const created = await createIssue(issueAssignees);
+                core.notice(`Filed new rotation issue #${created.data.number}`);
+              } catch (err) {
+                core.warning(`Issue creation with assignees=${issueAssignees.join(',')} failed: ${err.message}. Retrying without assignees.`);
+                const created = await createIssue([]);
+                core.notice(`Filed new rotation issue #${created.data.number} (unassigned)`);
+              }
+            }
+
+      - name: Upload full-eval results
+        if: always() && steps.gate.outputs.ready == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: full-eval-results-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/full-eval-results/**
+            ${{ runner.temp }}/**/eval-run-telemetry.json
+            ${{ runner.temp }}/**/eval-results.md
+            ${{ runner.temp }}/**/*.log
+            ${{ github.workspace }}/tests/full-eval-tests/result/**
+          if-no-files-found: warn
+          # Full-eval runs are sparser (1/day) and larger; keep them around longer
+          # than smoke artifacts so we have a regression baseline for at least a quarter.
+          retention-days: 90
+
+      # -----------------------------------------------------------------
+      # Hard-fail gate for PR-touched callers ONLY (mirrors PR #222 for
+      # smoke). `inputs.checkout-ref` is set by fabric-full-eval-pr-touched.yml
+      # when invoking us; scheduled cron and workflow_dispatch leave it empty
+      # or null. When non-zero errored OR bailed plans occur on a PR-touched
+      # run, this step fails the job so the PR's required check goes red and
+      # merge is blocked until the contributor addresses the failures.
+      #
+      # Scheduled cron + workflow_dispatch keep the prior observation-grade
+      # semantics (job succeeds regardless of per-plan outcomes) so nightly
+      # baseline + ad-hoc regression runs are not disrupted by a single
+      # transient failure.
+      #
+      # The `if:` uses BOTH a truthy `inputs.checkout-ref` check AND an
+      # explicit `github.event_name == 'workflow_call'` guard. The truthy
+      # check defends against the `inputs.X != ''` pitfall (on `schedule:`
+      # events the inputs context is null, and `null != ''` evaluates true
+      # in Actions expressions -- which would fire this step on cron
+      # unintentionally). The event_name guard is belt-and-suspenders so
+      # even if a future caller ever forgets to set checkout-ref, scheduled
+      # runs still won't hit this gate.
+      #
+      # Counted as failure: errored + bailed (suite bail-out is already a
+      # script-level non-zero exit). Skipped plans (--SkipWarehouse etc.)
+      # are excluded since they're explicitly opted-out, not failures.
+      # -----------------------------------------------------------------
+      - name: Fail PR-touched full-eval on errored/bailed plans
+        # `github.event_name` in a reusable workflow reflects the CALLER's
+        # trigger (e.g. `pull_request_target` for PR-touched, `schedule`
+        # for cron, `workflow_dispatch` for manual), NOT the literal string
+        # `'workflow_call'`. Use `inputs.checkout-ref` -- set only by the
+        # PR-touched orchestrator, null/empty on cron + dispatch -- as the
+        # discriminator. The truthy check covers null and empty.
+        if: >-
+          always()
+          && inputs.checkout-ref
+          && steps.gate.outputs.ready == 'true'
+        shell: bash
+        env:
+          ERRORED_COUNT: ${{ steps.summarise.outputs.errored-count }}
+          BAILED_COUNT: ${{ steps.summarise.outputs.bailed-count }}
+          COMPLETED_COUNT: ${{ steps.summarise.outputs.completed-count }}
+          TOTAL_COUNT: ${{ steps.summarise.outputs.total-count }}
+          SKIPPED_COUNT: ${{ steps.summarise.outputs.skipped-count }}
+          TEST_FAIL_COUNT: ${{ steps.summarise.outputs.test-fail-count }}
+          TEST_PASS_COUNT: ${{ steps.summarise.outputs.test-pass-count }}
+          TEST_PASS_RATE: ${{ steps.summarise.outputs.test-pass-rate }}
+          # Scoped-gate inputs (set when the PR-touched caller passes
+          # gate-plan-filter). GATE_SCOPED=true => fail only on the touched
+          # skills' plans; empty/false => gate the whole suite (current).
+          GATE_SCOPED: ${{ steps.summarise.outputs.gate-scoped }}
+          GATE_PLAN_FILTER: ${{ inputs.gate-plan-filter }}
+          GATE_PLAN_FAIL_COUNT: ${{ steps.summarise.outputs.gate-plan-fail-count }}
+          GATE_TEST_FAIL_COUNT: ${{ steps.summarise.outputs.gate-test-fail-count }}
+          GATE_TOTAL_COUNT: ${{ steps.summarise.outputs.gate-total-count }}
+          GATE_COMPLETED_COUNT: ${{ steps.summarise.outputs.gate-completed-count }}
+          GATE_SKIPPED_COUNT: ${{ steps.summarise.outputs.gate-skipped-count }}
+        run: |
+          set -euo pipefail
+          errored=${ERRORED_COUNT:-0}
+          bailed=${BAILED_COUNT:-0}
+          completed=${COMPLETED_COUNT:-0}
+          total=${TOTAL_COUNT:-0}
+          skipped=${SKIPPED_COUNT:-0}
+          test_fail=${TEST_FAIL_COUNT:-0}
+          test_pass=${TEST_PASS_COUNT:-0}
+          test_rate="${TEST_PASS_RATE:-}"
+          gate_scoped="${GATE_SCOPED:-false}"
+          # Compute plan-level fail by exclusion so any new/unknown status
+          # bucket (now or future) counts as a failure -- avoids the silent
+          # gate-bypass that biting only on errored + bailed allowed for
+          # chain_failed + completed_missing_result. Test-level failures are
+          # also a hard fail (a plan can "complete" with internal regressions).
+          plan_fail=$((total - completed - skipped))
+          if [ "${plan_fail}" -lt 0 ]; then plan_fail=0; fi
+          echo "PR-touched full-eval gate: plans ${completed}/${total} completed, ${skipped} skipped, ${plan_fail} non-completed-non-skipped (errored=${errored} bailed=${bailed}); tests ${test_pass} pass, ${test_fail} fail (rate=${test_rate}%)"
+          # When the caller scoped the gate to the touched skills' plans (a
+          # run-all PR that touches specific skills), override the
+          # merge-blocking counts with the scoped subset. The full numbers above
+          # remain the reported context; only the pass/fail decision is scoped
+          # so unrelated environmental bails dragged in by run-all escalation do
+          # not block the PR. Empty filter (pure-infra PR) keeps whole-suite
+          # gating.
+          scope_note=""
+          if [ "${gate_scoped}" = "true" ]; then
+            plan_fail=${GATE_PLAN_FAIL_COUNT:-0}
+            test_fail=${GATE_TEST_FAIL_COUNT:-0}
+            scope_note=" (gate scoped to touched-skill plans: ${GATE_PLAN_FILTER})"
+            echo "PR-touched gate SCOPED${scope_note}: ${GATE_COMPLETED_COUNT:-0}/${GATE_TOTAL_COUNT:-0} completed, ${GATE_SKIPPED_COUNT:-0} skipped, plan_fail=${plan_fail}, test_fail=${test_fail}. Full-run counts above are context only."
+          fi
+          if [ "${plan_fail}" -gt 0 ]; then
+            echo "::error::PR-touched full-eval gate failed at PLAN level: ${plan_fail} plan(s) not completed${scope_note}. See the Summarise step above for per-plan detail."
+            exit 1
+          fi
+          if [ "${test_fail}" -gt 0 ]; then
+            echo "::error::PR-touched full-eval gate failed at TEST level: ${test_fail} test case(s) failed inside otherwise-completed plans${scope_note}. See the eval-results.md Summary section / artifact for per-skill detail."
+            exit 1
+          fi
+          echo "PR-touched gate passed${scope_note}."

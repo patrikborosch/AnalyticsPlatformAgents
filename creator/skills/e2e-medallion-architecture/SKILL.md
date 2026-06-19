@@ -75,6 +75,7 @@ For Spark-specific optimization details, see [data-engineering-patterns.md](../s
 - Clear layer ownership: engineers own Bronze/Silver, analysts own Gold
 - Fabric Variable Libraries to centralize paths and configuration across layers
 - Multi-workspace deployment patterns for medium/high governance requirements (Bronze/Silver/Gold in separate workspaces)
+- Use Materialized Lake Views (MLVs) for Silver/Gold tables when the transformation is expressible in Spark SQL and benefits from declarative refresh semantics. See [spark-authoring-cli — Materialized Lake View patterns](../spark-authoring-cli/resources/materialized-lake-view-patterns.md) and [MLV incremental refresh patterns](../spark-authoring-cli/resources/mlv-incremental-refresh-patterns.md).
 
 ### AVOID
 - Storing all layers in a single lakehouse — this defeats isolation and independent optimization
@@ -218,7 +219,7 @@ Build a semantic model on top of the Gold lakehouse, using DirectLake.
    ```sql
    SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'nyc_taxi_daily_summary'
    ```
-3. **Create a semantic model** — use the [powerbi-authoring-cli](../powerbi-authoring-cli/SKILL.md) skill for semantic model creation and TMDL deployment. Create via `POST /v1/workspaces/{workspaceId}/items` with `type: "SemanticModel"` then deploy definition via `updateDefinition` using TMDL format (see [ITEM-DEFINITIONS-CORE.md § SemanticModel](../../common/ITEM-DEFINITIONS-CORE.md#semanticmodel)):
+3. **Create a semantic model** — use the [semantic-model-authoring](../semantic-model-authoring/SKILL.md) skill for semantic model creation and TMDL deployment. Create via `POST /v1/workspaces/{workspaceId}/items` with `type: "SemanticModel"` then deploy definition via `updateDefinition` using TMDL format (see [ITEM-DEFINITIONS-CORE.md § SemanticModel](../../common/ITEM-DEFINITIONS-CORE.md#semanticmodel)):
    - The model must reference the Gold lakehouse SQL endpoint as its data source
    - Define a table mapping to the Gold summary table (e.g., `nyc_taxi_daily_summary`)
    - Use **Direct Lake** mode — this connects directly to Delta tables in OneLake without data import
@@ -227,7 +228,7 @@ Build a semantic model on top of the Gold lakehouse, using DirectLake.
    - Reference the semantic model created in step 3 via `definition.pbir`
    - Define at least one page with visuals on the Gold summary table
    - Suggested visuals: line chart (daily trend), card (KPI totals), bar chart (by category), table (detail view)
-5. **Verify end-to-end** — use the `powerbi-consumption-cli` skill to run DAX queries against the semantic model and confirm data flows from Gold tables through to the report
+5. **Verify end-to-end** — use the `semantic-model-consumption` skill to run DAX queries against the semantic model and confirm data flows from Gold tables through to the report
 
 ### Principles
 
@@ -235,8 +236,8 @@ Build a semantic model on top of the Gold lakehouse, using DirectLake.
 - **Wait for SQL endpoint provisioning** — status must be `Success` before connecting; newly created lakehouses may take minutes to provision
 - **Prefer Direct Lake mode** — avoids data duplication; semantic model reads directly from OneLake Delta tables
 - **Match table/column names exactly** — the semantic model table definition must use the exact Delta table and column names from the Gold lakehouse
-- **For semantic model authoring** (TMDL, refresh, permissions), cross-reference the [powerbi-authoring-cli](../powerbi-authoring-cli/SKILL.md) skill
-- **For DAX query validation**, cross-reference the [powerbi-consumption-cli](../powerbi-consumption-cli/SKILL.md) skill
+- **For semantic model authoring** (TMDL, refresh, permissions), cross-reference the [semantic-model-authoring](../semantic-model-authoring/SKILL.md) skill
+- **For DAX query validation**, cross-reference the [semantic-model-consumption](../semantic-model-consumption/SKILL.md) skill
 
 ---
 

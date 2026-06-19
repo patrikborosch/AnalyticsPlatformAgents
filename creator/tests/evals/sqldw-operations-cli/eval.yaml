@@ -1,0 +1,90 @@
+# Vally eval config -- migrated from tests/tests.json (skills-for-fabric)
+# Source stimulus: sql-operations-slow-queries
+#
+# NOTE: This stimulus targets MSSales warehouse in MSSales workspace on MSIT Fabric.
+# It does NOT use {{WORKSPACE}} substitution -- the workspace is hardcoded in the prompt.
+# This is intentional: the queryinsights DMV data only exists in MSIT.
+
+name: sqldw-operations-cli-integration-eval
+description: |
+  Integration evaluation for sqldw-operations-cli -- verifies slow query
+  analysis using queryinsights DMVs against MSSales warehouse (MSIT).
+
+tags:
+  type: integration
+  skill: sqldw-operations-cli
+  # MSIT-only: queryinsights DMV data only exists in MSSales on MSIT Fabric.
+  # Excluded from default operations/ci suites via .vally.yaml. Run explicitly
+  # with `-Skill sqldw-operations-cli` from a tenant with MSSales access.
+  scope: msit-only
+
+environment:
+  skills:
+    - ../../../skills/sqldw-operations-cli
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- sql-operations-slow-queries --
+  - name: "DW slow query analysis from queryinsights"
+    prompt: |
+      Using the MSSales warehouse in the MSSales workspace on my MSIT Fabric,
+      run a DW slow query analysis from queryinsights and show me the top 5
+      slowest queries.
+    tags:
+      # No `tier: smoke` -- this stimulus targets MSSales on MSIT Fabric, not the
+      # ephemeral CI tenant. The smoke suite filter (`tier: smoke`) excludes it.
+      # Run explicitly via the msit suite (`scope: msit-only`) from a tenant
+      # with MSSales access.
+      type: integration
+      scope: msit-only
+      cost: llm
+      area: sqldw
+    # Per-stimulus constraints (in-flight kill-switch, scope=msit-only)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - sqldw-consumption-cli
+        - sqldw-authoring-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - sqldw-operations-cli
+          disallowed:
+            - sqldw-consumption-cli
+            - sqldw-authoring-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          pattern: "(?i)long_running_queries"
+      - type: output-matches
+        config:
+          pattern: "(?i)elapsed_time"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50

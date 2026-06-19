@@ -1,7 +1,7 @@
 ---
 name: spark-consumption-cli
 description: >
-  Analyze lakehouse data interactively using Fabric Livy sessions and PySpark/Spark SQL for advanced analytics,
+  Analyze lakehouse data interactively using Fabric Lakehouse Livy API sessions and PySpark/Spark SQL for advanced analytics,
   DataFrames, cross-lakehouse joins, Delta time-travel, and unstructured/JSON data. Use when the user explicitly
   asks for PySpark, Spark DataFrames, Livy sessions, or Python-based analysis — NOT for simple SQL queries.
   Triggers: "PySpark", "Spark SQL", "analyze with PySpark", "Spark DataFrame", "Livy session",
@@ -54,13 +54,13 @@ description: >
 | Relationship to SPARK-AUTHORING-CORE.md | [SPARK-CONSUMPTION-CORE.md § Relationship to SPARK-AUTHORING-CORE.md](../../common/SPARK-CONSUMPTION-CORE.md#relationship-to-spark-authoring-coremd) ||
 | Data Engineering Consumption Capability Matrix | [SPARK-CONSUMPTION-CORE.md § Data Engineering Consumption Capability Matrix](../../common/SPARK-CONSUMPTION-CORE.md#data-engineering-consumption-capability-matrix) ||
 | OneLake Table APIs (Schema-enabled Lakehouses) | [SPARK-CONSUMPTION-CORE.md § OneLake Table APIs (Schema-enabled Lakehouses)](../../common/SPARK-CONSUMPTION-CORE.md#onelake-table-apis-schema-enabled-lakehouses) | Unity Catalog-compatible metadata; requires `storage.azure.com` token |
-| Livy Session Management | [SPARK-CONSUMPTION-CORE.md § Livy Session Management](../../common/SPARK-CONSUMPTION-CORE.md#livy-session-management) | Session creation, states, lifecycle, termination |
+| Lakehouse Livy Session Management | [SPARK-CONSUMPTION-CORE.md § Livy Session Management](../../common/SPARK-CONSUMPTION-CORE.md#livy-session-management) | Lakehouse Livy API: session creation, states, lifecycle, termination |
 | Interactive Data Exploration | [SPARK-CONSUMPTION-CORE.md § Interactive Data Exploration](../../common/SPARK-CONSUMPTION-CORE.md#interactive-data-exploration) | Statement execution, output retrieval, data discovery |
 | PySpark Analytics Patterns | [SPARK-CONSUMPTION-CORE.md § PySpark Analytics Patterns](../../common/SPARK-CONSUMPTION-CORE.md#pyspark-analytics-patterns) | Cross-lakehouse 3-part naming, performance optimization |
 | Must/Prefer/Avoid | [SKILL.md § Must/Prefer/Avoid](#mustpreferavoid) | **MUST DO / AVOID / PREFER** checklists |
-| Quick Start | [SKILL.md § Quick Start](#quick-start) | CLI-specific Livy session setup and data exploration |
+| Quick Start | [SKILL.md § Quick Start](#quick-start) | CLI-specific Lakehouse Livy session setup and data exploration |
 | Key Fabric Patterns | [SKILL.md § Key Fabric Patterns](#key-fabric-patterns) | Spark pattern quick-reference table |
-| Session Cleanup | [SKILL.md § Session Cleanup](#session-cleanup) | Clean up idle Livy sessions via CLI |
+| Session Cleanup | [SKILL.md § Session Cleanup](#session-cleanup) | Clean up idle Lakehouse Livy sessions via CLI |
 
 ---
 
@@ -84,6 +84,7 @@ description: >
 - Hardcoded workspace IDs
 - Creating unnecessary sessions
 - Large result sets without LIMIT
+- **Confusing Lakehouse Livy sessions with Notebook Spark sessions** — This skill covers **Lakehouse Livy sessions** (the public Livy API at `/lakehouses/{lhId}/livyapi/.../sessions`). Notebook Spark sessions are created internally when running a notebook via the Jobs API (`RunNotebook`) and are NOT managed through the Livy API. To run a notebook as a job, see SPARK-AUTHORING-CORE.md § Notebook Execution & Job Management
 
 ---
 
@@ -112,9 +113,12 @@ az rest --method get --resource "$FABRIC_RESOURCE_SCOPE" --url "$FABRIC_API_URL/
 read -p "Lakehouse ID: " lakehouseId
 ```
 
-### Session Management
+### Lakehouse Livy Session Management
+
+> **Two types of Spark sessions in Fabric** — This skill manages **Lakehouse Livy sessions**, created via the public Livy API endpoint (`/lakehouses/{lhId}/livyapi/.../sessions`). These are ad-hoc interactive sessions for remote clients. **Notebook Spark sessions** are a separate mechanism — they are created internally when a Fabric Notebook is executed (via portal or Jobs API `RunNotebook`), and are managed through the notebook lifecycle, not the Livy API.
+
 ```bash
-# Check for existing idle session (avoid resource waste)
+# Check for existing idle Lakehouse Livy session (avoid resource waste)
 sessionId=$(az rest --method get --resource "$FABRIC_RESOURCE_SCOPE" --url "$FABRIC_API_URL/workspaces/$workspaceId/lakehouses/$lakehouseId/$LIVY_API_PATH/sessions" --query "sessions[?state=='idle'][0].id" --output tsv)
 
 # Create if none available - FORCE STARTER POOL USAGE
@@ -171,9 +175,9 @@ az rest --method post --resource "$FABRIC_RESOURCE_SCOPE" --url "$FABRIC_API_URL
 | **Delta Features** | `df.history()`, `df.readVersion(1)` | Time travel, versioning |
 | **Schema Evolution** | `df.printSchema()` | Understand structure |
 
-## Session Cleanup
+## Lakehouse Livy Session Cleanup
 ```bash
-# Clean up idle sessions (optional)
+# Clean up idle Lakehouse Livy sessions (optional)
 az rest --method get --resource "$FABRIC_RESOURCE_SCOPE" --url "$FABRIC_API_URL/workspaces/$workspaceId/lakehouses/$lakehouseId/$LIVY_API_PATH/sessions" --query "sessions[?state=='idle'].id" --output tsv | xargs -I {} az rest --method delete --resource "$FABRIC_RESOURCE_SCOPE" --url "$FABRIC_API_URL/workspaces/$workspaceId/lakehouses/$lakehouseId/$LIVY_API_PATH/sessions/{}"
 ```
 

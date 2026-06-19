@@ -1,0 +1,178 @@
+# Vally eval config -- migrated from tests/tests.json (skills-for-fabric)
+# Source stimuli: spark-operations-failed-notebook, spark-operations-pipeline-diagnosis,
+#   spark-operations-session-health
+# Pattern reference: microsoft/GitHub-Copilot-for-Azure#2235
+#
+# Known gap: prompts contain {{WORKSPACE}} placeholder substituted at runtime by
+# tests/run-vally-eval.ps1. See tests/evals/README.md for local-run instructions.
+
+name: spark-operations-cli-integration-eval
+description: |
+  Integration evaluation for spark-operations-cli -- verifies notebook failure
+  diagnosis, pipeline failure triage, and Livy session health checks.
+
+tags:
+  type: integration
+  skill: spark-operations-cli
+
+environment:
+  skills:
+    - ../../../skills/spark-operations-cli
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- spark-operations-failed-notebook --
+  - name: "Diagnose failed notebook run"
+    prompt: |
+      In workspace {{WORKSPACE}}, diagnose the latest failed run for notebook
+      spark_operations_failing_notebook. Retrieve the job instance details and
+      explain the failure reason. Only use the specified workspace. If not
+      found, report an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: spark
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - spark-authoring-cli
+        - spark-consumption-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - spark-operations-cli
+          disallowed:
+            - spark-authoring-cli
+            - spark-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          pattern: "(?i)failed"
+      # expectedResults parity with smoke
+      - type: output-contains
+        config:
+          substring: "Failed"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- spark-operations-pipeline-diagnosis --
+  - name: "Diagnose failed pipeline Spark activity"
+    prompt: |
+      In workspace {{WORKSPACE}}, diagnose the most recent failed pipeline run
+      and identify which Spark activity caused the failure. Only use the
+      specified workspace. If not found, report an error. Do NOT search or use
+      any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: spark
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+    # TODO(workload-team): backfill a deterministic positive output
+    # assertion (output-matches or output-contains on a tool-trace
+    # token, NOT on narrative prose). See tests/evals/README.md.
+    l0_exempt:
+      - positive-output-assertion
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - spark-operations-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- spark-operations-session-health --
+  - name: "Check Livy session health"
+    prompt: |
+      In workspace {{WORKSPACE}}, check Spark Livy session health and identify
+      idle, stuck, or unhealthy sessions. Only use the specified workspace. If
+      not found, report an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: spark
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+    # TODO(workload-team): backfill a deterministic positive output
+    # assertion (output-matches or output-contains on a tool-trace
+    # token, NOT on narrative prose). See tests/evals/README.md.
+    l0_exempt:
+      - positive-output-assertion
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - spark-operations-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50

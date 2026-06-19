@@ -1,0 +1,575 @@
+name: Fabric Full-Eval (PR-touched)
+
+# Per-PR full-eval gate. When a PR touches skills/, common/, plugins/,
+# tests/full-eval-tests/, or build/build_plugins.py, this workflow detects
+# which skills changed and maps them to the per-skill eval plans via
+# tests/select_plans_for_skills.py. Skill-only changes run ONLY the matching
+# plans; changes to shared infrastructure (common/, plugins/,
+# tests/full-eval-tests/, build/build_plugins.py) escalate to all plans
+# because they can affect any skill's runtime behavior. The selected plans
+# (matching set OR all) flow through the existing full-eval pipeline via
+# workflow_call into fabric-full-eval-ephemeral.yml.
+#
+# Trigger model: `pull_request_target` (NOT `pull_request`) so PRs from forks
+# -- including personal forks owned by Microsoft workload-team members who
+# don't have write access on gim-home/skills-for-fabric -- can run with
+# secrets and the workflow-level grants declared below (currently
+# `id-token: write` for OIDC and `issues: write` for the PR result comment).
+# The workflow file is loaded from the BASE branch (main), so PR contents
+# can't change CI logic. PR HEAD code is checked out by the called eval
+# workflow via `checkout-ref` input, pinned to head.sha (not head.ref) to
+# defend against TOCTOU race-swap.
+#
+# Authorization model: GitHub-native fork-PR approval (same as
+# fabric-smoke-pr-touched.yml). The repo's Settings > Actions > General >
+# "Fork pull request workflows from outside collaborators" enforces "Require
+# approval for fork pull request workflows" (controlled by enterprise/org
+# policy). Every fork PR from a non-write-access contributor gets a yellow
+# banner with a one-click "Approve and run workflows" gate by a maintainer.
+# Same-repo PRs (push access already gated by write permission) auto-run.
+# We deliberately do NOT add a custom label gate on top -- it would
+# duplicate the native gate and force a manual step that adds latency
+# without adding security.
+#
+# If the enterprise/org policy is ever loosened, revisit this comment.
+#
+# Skill -> plan mapping uses metadata, not filename heuristics. See
+# tests/select_plans_for_skills.py (reuses indexing logic from
+# tests/coverage_gap_report.py).
+#
+# Companion: fabric-smoke-pr-touched.yml (sibling, smoke instead of full-eval).
+
+on:
+  pull_request_target:
+    # `converted_to_draft` is critical: without it, a PR with a previous
+    # full-eval sticky that gets marked draft does NOT fire any event, so
+    # the gate step never runs to refresh the sticky to "skipped: PR is
+    # draft" -- the stale comment misleads contributors. `ready_for_review`
+    # handles the inverse (draft -> ready) and is also in the list.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    paths:
+      - 'skills/**'
+      - 'common/**'
+      - 'plugins/**'
+      - 'tests/full-eval-tests/**'
+      # Keep this in sync with INFRA_PREFIXES in tests/select_plans_for_skills.py.
+      # If a PR touches only build_plugins.py, we still want the workflow to fire
+      # (and the helper escalates it to a run-all detection).
+      - 'build/build_plugins.py'
+
+permissions:
+  id-token: write         # required for Phase B OIDC by the called workflow
+  contents: read
+  issues: write           # required for tenant-rotation auto-issue in the called workflow AND for the post-comment job's github.rest.issues.createComment (PR comments live on the issues API surface)
+
+# Per-PR sub-group. `cancel-in-progress: true` matches smoke-pr-touched:
+# a new push to the same PR cancels the in-flight eval and starts a fresh
+# one. Stranded-resource risk (workspace/lakehouse/warehouse on mid-step
+# cancellation) is bounded by the orphan-FullEval-workspace sweep step in
+# the called workflow's schedule path (deletes any FullEval-* workspace
+# older than 24h on each nightly cron).
+# The called workflow now keys its shared-tenant concurrency per PR
+# (`fabric-full-eval-shared-tenant-<pr>`) with cancel-in-progress true for PR
+# callers, so a new push supersedes that PR's in-flight eval; schedule and
+# workflow_dispatch each get their own non-cancelling slot. Different PRs run
+# concurrently. Smoke runs in a separate `fabric-smoke-shared-tenant-*` lane.
+concurrency:
+  group: fabric-full-eval-pr-touched-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # -----------------------------------------------------------------
+  # detect: list changed files, decide whether to run full-eval, and
+  # compute the plan-filter csv.
+  # Outputs:
+  #   - should-run-eval: 'true' | 'false'  -- explicit gate for the eval job
+  #   - run-all:         'true' | 'false'  -- true when infrastructure touched
+  #   - plan-filter:     '' | <csv>        -- empty when run-all=true
+  #   - touched-skills, touched-count, matched-plan-count, unmatched-skills,
+  #     skip-reason: surfaced to the PR comment
+  # -----------------------------------------------------------------
+  detect:
+    runs-on: ubuntu-latest
+    # The draft / label gate now lives INSIDE this job (step `gate`) rather
+    # than at job level. Why: a job-level `if:` filter causes the WHOLE job
+    # to skip on `unlabeled` / draft-toggle events, which in turn causes the
+    # `post-comment` job to skip (its `needs.detect.result == 'success'`
+    # check fails when detect is skipped). The result is that the previous
+    # "eval queued" sticky comment is NEVER refreshed when a maintainer
+    # removes the `run-full-eval` label or marks the PR as draft -- the
+    # stale comment falsely implies eval will still run. Running the job
+    # unconditionally and surfacing a `skip-reason` lets post-comment
+    # update the sticky to reflect the new state. The per-PR concurrency
+    # group cancels mid-flight detect runs on rapid label-toggle.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      should-run-eval: ${{ steps.detect.outputs.should-run-eval || steps.gate.outputs.should-run-eval }}
+      run-all: ${{ steps.detect.outputs.run-all || steps.gate.outputs.run-all }}
+      plan-filter: ${{ steps.detect.outputs.plan-filter }}
+      # gate-plan-filter: the subset of plans the gate is allowed to hard-fail
+      # on (the touched skills' plans). Differs from plan-filter only on a
+      # run-all (infra) run, where plan-filter is empty but gate-plan-filter
+      # still scopes the gate to the touched skills so unrelated environmental
+      # bails in other plans do not block the PR. Empty => gate uses the whole
+      # suite (pure-infra change with no touched skill).
+      gate-plan-filter: ${{ steps.detect.outputs.gate-plan-filter }}
+      touched-skills: ${{ steps.detect.outputs.touched-skills }}
+      touched-count: ${{ steps.detect.outputs.touched-count }}
+      matched-plan-count: ${{ steps.detect.outputs.matched-plan-count }}
+      unmatched-skills: ${{ steps.detect.outputs.unmatched-skills }}
+      skip-reason: ${{ steps.detect.outputs.skip-reason || steps.gate.outputs.skip-reason }}
+    steps:
+      # Step-level draft gate. Emits `skip-reason` and (when skipped)
+      # `should-run-eval=false` directly so the downstream detection logic
+      # + secret-touching steps can short-circuit while the job itself
+      # still completes successfully -- which keeps the post-comment job
+      # alive on draft-toggle events so the sticky comment refreshes
+      # instead of going stale.
+      #
+      # Single gate: not draft. Fork-PR trust is enforced by the
+      # GitHub-native "Approve and run workflows" gate (see header
+      # comment); same-repo PRs auto-run.
+      - name: Gate draft
+        id: gate
+        shell: bash
+        env:
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          set -euo pipefail
+          # Default outputs: gate passes -> empty skip-reason -> downstream
+          # steps run normally. Draft branch overrides as needed.
+          if [ "${IS_DRAFT}" = "true" ]; then
+            echo "Gate: PR is draft. Skipping eval (sticky comment will reflect this)."
+            {
+              echo "should-run-eval=false"
+              echo "run-all=false"
+              echo "skip-reason=PR is draft"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Gate: not draft. Proceeding to detect."
+          echo "skip-reason=" >> "$GITHUB_OUTPUT"
+
+      # Pin to head.sha (NOT head.ref) to defend against TOCTOU race-swap:
+      # head.ref can change between gate decision and checkout, head.sha can't.
+      # We only check out the PR head HERE to run select_plans_for_skills.py
+      # against the PR's tests/select_plans_for_skills.py + plan files; the
+      # called eval workflow has its own checkout pinned the same way.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        if: steps.gate.outputs.skip-reason == ''
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup Python (for select_plans_for_skills.py)
+        if: steps.gate.outputs.skip-reason == ''
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+
+      - name: Detect touched skills + map to plans
+        id: detect
+        if: steps.gate.outputs.skip-reason == ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # List files changed in the PR via the GitHub REST API with explicit
+          # pagination. `gh pr view --json files` is NOT paginated and silently
+          # truncates at ~100 files, which would miss touched skills on large
+          # changesets. The REST endpoint `/repos/{owner}/{repo}/pulls/{n}/files`
+          # supports --paginate to enumerate all pages.
+          changed_files_path="${RUNNER_TEMP}/changed-files.txt"
+          gh api --paginate "/repos/${{ github.repository }}/pulls/$PR_NUMBER/files" --jq '.[].filename' > "$changed_files_path"
+          file_count=$(wc -l < "$changed_files_path" | tr -d ' ')
+          echo "Changed files ($file_count):"
+          sed 's/^/  /' "$changed_files_path"
+
+          # Restore the mapping helper from the TRUSTED base branch before
+          # running it. PR HEAD can modify select_plans_for_skills.py /
+          # coverage_gap_report.py to fake the gate (emit 0 matched plans
+          # to bypass eval, or escalate to run-all to burn capacity). The
+          # restore overwrites just the .py code in place; PR HEAD content
+          # under skills/, common/, plugins/, tests/full-eval-tests/plan/
+          # (which the helper indexes) stays from the PR HEAD checkout --
+          # that's content under test, not code under trust.
+          # Bootstrap: this PR introduces select_plans_for_skills.py, so on
+          # PR #213 itself the file is not on origin/<base>. We log a
+          # warning and proceed with the PR HEAD copy in that case.
+          # Fail hard on fetch error -- a transient DNS / 5xx must NOT silently
+          # fall back to the PR HEAD copy of the selector (which would defeat
+          # the trust restore). Genuine "file not on base" (bootstrap path) is
+          # detected separately via `git cat-file -e` below.
+          base_ref="${{ github.event.pull_request.base.ref }}"
+          git fetch --depth=1 origin "${base_ref}" || { echo "::error::Failed to fetch origin/${base_ref}; cannot restore trusted helpers. Refusing to proceed to avoid running the PR HEAD's untrusted selector copy."; exit 1; }
+          restored=0
+          for f in tests/select_plans_for_skills.py tests/coverage_gap_report.py ; do
+            if git cat-file -e "origin/${base_ref}:${f}" 2>/dev/null ; then
+              git checkout "origin/${base_ref}" -- "${f}"
+              echo "  Restored from origin/${base_ref}: ${f}"
+              restored=$((restored+1))
+            else
+              echo "::warning::${f} not on origin/${base_ref}; trusting PR HEAD copy (bootstrap)."
+            fi
+          done
+          echo "Trusted-restore summary: ${restored}/2 helper files restored from base."
+
+          # Run the mapping helper. It returns JSON with matched_plans,
+          # touched_skills, unmatched_skills, infrastructure_change, etc.
+          selection_path="${RUNNER_TEMP}/plan-selection.json"
+          python tests/select_plans_for_skills.py --changed-files "$changed_files_path" > "$selection_path"
+          cat "$selection_path"
+
+          # Pull fields out for output. Use python (not jq) to avoid an extra dep.
+          read_field() {
+            python -c "import json,sys; d=json.load(open('$selection_path')); v=d.get('$1'); print(v if isinstance(v,(str,int,bool)) else ','.join(v) if isinstance(v,list) else '')"
+          }
+
+          infra=$(read_field infrastructure_change)
+          force_run_all=$(read_field force_run_all)
+          force_run_all_reason=$(read_field force_run_all_reason)
+          matched_plans=$(read_field matched_plans)
+          touched_skills=$(read_field touched_skills)
+          touched_plugins=$(read_field touched_plugins)
+          unmatched_skills=$(read_field unmatched_skills)
+          gate_scope_plans=$(read_field gate_scope_plans)
+          matched_count=$(python -c "import json; print(len(json.load(open('$selection_path'))['matched_plans']))")
+          touched_count=$(python -c "import json; print(len(json.load(open('$selection_path'))['touched_skills']))")
+
+          if [ "$infra" = "True" ]; then
+            echo "Infrastructure change detected. Running ALL plans (plan-filter='')."
+            echo "should-run-eval=true"  >> "$GITHUB_OUTPUT"
+            echo "run-all=true"           >> "$GITHUB_OUTPUT"
+            echo "plan-filter="           >> "$GITHUB_OUTPUT"
+            echo "gate-plan-filter=$gate_scope_plans" >> "$GITHUB_OUTPUT"
+            echo "touched-skills=$touched_skills" >> "$GITHUB_OUTPUT"
+            echo "touched-count=$touched_count"   >> "$GITHUB_OUTPUT"
+            echo "matched-plan-count=all"         >> "$GITHUB_OUTPUT"
+            echo "unmatched-skills="              >> "$GITHUB_OUTPUT"
+            echo "skip-reason="                   >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$force_run_all" = "True" ]; then
+            # Avi finding F-R1: a plugin folder was touched but its manifest
+            # at HEAD yielded zero skills (missing file, malformed JSON,
+            # empty array, missing key, or unrecognized entries). Before the
+            # plugin-narrowing split, plugins/ was in INFRA_PREFIXES so this
+            # same change would have run all plans. The helper preserves
+            # that safety net via force_run_all so a manifest typo cannot
+            # silently bypass the gate. The reason string surfaces the
+            # touched plugin(s); the underlying cause is in the helper's
+            # stderr WARNING lines visible in this step's log above.
+            echo "force_run_all=True (touched plugin(s) [$touched_plugins] yielded no skills). Running ALL plans."
+            echo "should-run-eval=true"  >> "$GITHUB_OUTPUT"
+            echo "run-all=true"           >> "$GITHUB_OUTPUT"
+            echo "plan-filter="           >> "$GITHUB_OUTPUT"
+            echo "gate-plan-filter=$gate_scope_plans" >> "$GITHUB_OUTPUT"
+            echo "touched-skills=$touched_skills" >> "$GITHUB_OUTPUT"
+            echo "touched-count=$touched_count"   >> "$GITHUB_OUTPUT"
+            echo "matched-plan-count=all"         >> "$GITHUB_OUTPUT"
+            echo "unmatched-skills="              >> "$GITHUB_OUTPUT"
+            echo "skip-reason=$force_run_all_reason" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$touched_count" = "0" ]; then
+            # The path filter on `on.pull_request.paths` already requires one of
+            # skills/, common/, plugins/, tests/full-eval-tests/. We hit this
+            # branch when paths are e.g. all under tests/full-eval-tests/ but
+            # NOT classified as infra (e.g. typo path) -- bail with skip-reason.
+            echo "No skill folders touched (and no infrastructure file). Skipping eval."
+            echo "should-run-eval=false" >> "$GITHUB_OUTPUT"
+            echo "run-all=false"          >> "$GITHUB_OUTPUT"
+            echo "plan-filter="           >> "$GITHUB_OUTPUT"
+            echo "gate-plan-filter="      >> "$GITHUB_OUTPUT"
+            echo "touched-skills="        >> "$GITHUB_OUTPUT"
+            echo "touched-count=0"        >> "$GITHUB_OUTPUT"
+            echo "matched-plan-count=0"   >> "$GITHUB_OUTPUT"
+            echo "unmatched-skills="      >> "$GITHUB_OUTPUT"
+            echo "skip-reason=PR touched only non-skill files (no skills/, common/, plugins/, or infra paths matched)." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$matched_count" = "0" ]; then
+            # Skills touched but no eval plans cover them (e.g. a skill that
+            # has not yet been added to tests/full-eval-tests/). DO NOT fall
+            # back to an unrelated sanity plan -- that produces misleading
+            # green signal. Surface a coverage gap instead.
+            echo "Touched skills [$touched_skills] have no eval coverage. Skipping eval."
+            echo "should-run-eval=false" >> "$GITHUB_OUTPUT"
+            echo "run-all=false"          >> "$GITHUB_OUTPUT"
+            echo "plan-filter="           >> "$GITHUB_OUTPUT"
+            echo "gate-plan-filter="      >> "$GITHUB_OUTPUT"
+            echo "touched-skills=$touched_skills" >> "$GITHUB_OUTPUT"
+            echo "touched-count=$touched_count"   >> "$GITHUB_OUTPUT"
+            echo "matched-plan-count=0"           >> "$GITHUB_OUTPUT"
+            echo "unmatched-skills=$unmatched_skills" >> "$GITHUB_OUTPUT"
+            echo "skip-reason=No full-eval plans cover the touched skill(s): [$touched_skills]. Add coverage under tests/full-eval-tests/." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Matched plans ($matched_count): $matched_plans"
+          echo "should-run-eval=true"  >> "$GITHUB_OUTPUT"
+          echo "run-all=false"          >> "$GITHUB_OUTPUT"
+          echo "plan-filter=$matched_plans" >> "$GITHUB_OUTPUT"
+          echo "gate-plan-filter=$gate_scope_plans" >> "$GITHUB_OUTPUT"
+          echo "touched-skills=$touched_skills" >> "$GITHUB_OUTPUT"
+          echo "touched-count=$touched_count"   >> "$GITHUB_OUTPUT"
+          echo "matched-plan-count=$matched_count" >> "$GITHUB_OUTPUT"
+          echo "unmatched-skills=$unmatched_skills" >> "$GITHUB_OUTPUT"
+          echo "skip-reason="           >> "$GITHUB_OUTPUT"
+
+      - name: Add detection summary to job log
+        if: always()
+        shell: bash
+        run: |
+          # Fall back to gate-step outputs when detect was skipped (gate
+          # decided not to run) so the workflow run summary still shows
+          # WHY the eval was skipped instead of a blank table.
+          {
+            echo "## PR-touched full-eval detection"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Should run eval | ${{ steps.detect.outputs.should-run-eval || steps.gate.outputs.should-run-eval }} |"
+            echo "| Run all plans | ${{ steps.detect.outputs.run-all || steps.gate.outputs.run-all }} |"
+            echo "| Touched skills | ${{ steps.detect.outputs.touched-count }} |"
+            echo "| Matched plans | ${{ steps.detect.outputs.matched-plan-count }} |"
+            echo "| Touched skill names | \`${{ steps.detect.outputs.touched-skills }}\` |"
+            echo "| Plans to run | \`${{ steps.detect.outputs.plan-filter }}\` |"
+            echo "| Unmatched skills | \`${{ steps.detect.outputs.unmatched-skills }}\` |"
+            echo "| Skip reason | ${{ steps.detect.outputs.skip-reason || steps.gate.outputs.skip-reason }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # -----------------------------------------------------------------
+  # eval: invokes fabric-full-eval-ephemeral.yml via workflow_call with the
+  # plan-filter computed by `detect`. Inherits all repo secrets so the called
+  # workflow's auth gate (Phase A direct secrets, Phase B OIDC + KV) works the
+  # same as for scheduled / dispatch runs.
+  # Only runs when detect says should-run-eval=true.
+  # -----------------------------------------------------------------
+  eval:
+    needs: detect
+    if: needs.detect.outputs.should-run-eval == 'true'
+    uses: ./.github/workflows/fabric-full-eval-ephemeral.yml
+    with:
+      plan-filter: ${{ needs.detect.outputs.plan-filter }}
+      # Scope the hard-fail gate to the touched skills' plans. On a run-all
+      # (infra) run this is non-empty while plan-filter is empty, so the gate
+      # fails only on the PR's own skills -- unrelated environmental bails in
+      # other plans (surfaced only because infra escalated to run-all) do not
+      # block the PR. Empty => gate falls back to whole-suite (pure-infra PR).
+      gate-plan-filter: ${{ needs.detect.outputs.gate-plan-filter }}
+      skip-warehouse: false
+      skip-lakehouse: false
+      skip-cleanup: false
+      # CRITICAL: pin the eval run to the PR HEAD commit so plans exercise the
+      # PR's modified skill files, not main's. Pinning to SHA (not ref) prevents
+      # TOCTOU race-swap by a malicious force-push between detect and eval.
+      checkout-ref: ${{ github.event.pull_request.head.sha }}
+      # Per-PR concurrency partitioning for the reusable workflow's shared-tenant
+      # group: lets different PRs run concurrently and stops a PR run from
+      # cancelling the queued nightly. caller-event-name (pull_request_target)
+      # drives cancel-in-progress so a new push to THIS PR supersedes its old run.
+      caller-pr-number: ${{ github.event.pull_request.number }}
+      caller-event-name: ${{ github.event_name }}
+    secrets: inherit
+
+  # -----------------------------------------------------------------
+  # post-comment: read the eval/detect outputs and post a FRESH top-level
+  # comment on the PR per run. The marker (``<!-- fabric-full-eval-pr-touched -->``)
+  # is retained for grep-ability across PR audits but is NOT used for
+  # lookup-and-update -- each run posts a new comment so reviewers see a
+  # notification per run while test infrastructure stabilises (see inline
+  # rationale in the script body).
+  # -----------------------------------------------------------------
+  post-comment:
+    needs: [detect, eval]
+    runs-on: ubuntu-latest
+    # always() ensures we post comments even when eval is skipped or fails.
+    # detect.result must be success (otherwise we have nothing to report).
+    if: always() && needs.detect.result == 'success'
+    permissions:
+      issues: write           # required for github.rest.issues.createComment (the API surface used by github-script for top-level PR comments)
+    steps:
+      - name: Post PR comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SHOULD_RUN_EVAL: ${{ needs.detect.outputs.should-run-eval }}
+          RUN_ALL: ${{ needs.detect.outputs.run-all }}
+          PLAN_FILTER: ${{ needs.detect.outputs.plan-filter }}
+          GATE_PLAN_FILTER: ${{ needs.detect.outputs.gate-plan-filter }}
+          TOUCHED_SKILLS: ${{ needs.detect.outputs.touched-skills }}
+          TOUCHED_COUNT: ${{ needs.detect.outputs.touched-count }}
+          MATCHED_PLAN_COUNT: ${{ needs.detect.outputs.matched-plan-count }}
+          UNMATCHED_SKILLS: ${{ needs.detect.outputs.unmatched-skills }}
+          SKIP_REASON: ${{ needs.detect.outputs.skip-reason }}
+          EVAL_RESULT: ${{ needs.eval.result }}
+          AUTH_READY: ${{ needs.eval.outputs.auth-ready }}
+          AUTH_MODE: ${{ needs.eval.outputs.auth-mode }}
+          TOTAL_COUNT: ${{ needs.eval.outputs.total-count }}
+          COMPLETED_COUNT: ${{ needs.eval.outputs.completed-count }}
+          ERRORED_COUNT: ${{ needs.eval.outputs.errored-count }}
+          BAILED_COUNT: ${{ needs.eval.outputs.bailed-count }}
+          SKIPPED_COUNT: ${{ needs.eval.outputs.skipped-count }}
+          TEST_PASS_COUNT: ${{ needs.eval.outputs.test-pass-count }}
+          TEST_FAIL_COUNT: ${{ needs.eval.outputs.test-fail-count }}
+          TEST_PASS_RATE: ${{ needs.eval.outputs.test-pass-rate }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        with:
+          script: |
+            // Marker is kept in the body for grep-ability across PR audits,
+            // but is NOT used for lookup-and-update: each run posts a FRESH
+            // top-level comment so reviewers see a notification per run while
+            // test infrastructure stabilises. Revisit (likely moving to inline
+            // + resolvable threads) once steady-state quality justifies the
+            // quieter pattern.
+            const MARKER = '<!-- fabric-full-eval-pr-touched -->';
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const runNumber = process.env.GITHUB_RUN_NUMBER || '?';
+            const headSha = (process.env.HEAD_SHA || '').slice(0, 7) || '(unknown)';
+
+            const shouldRunEval    = process.env.SHOULD_RUN_EVAL;
+            const runAll           = process.env.RUN_ALL;
+            // PLAN_FILTER label: derive default from RUN_ALL so a skipped
+            // (no-skill / draft / no-coverage) run doesn't render the
+            // contradictory "Matched plans (0): (all plans)" line. Only the
+            // infrastructure-change escalation legitimately shows "(all plans)";
+            // every other empty PLAN_FILTER state is "(none)".
+            const planFilter       = process.env.PLAN_FILTER || (runAll === 'true' ? '(all plans)' : '(none)');
+            const gatePlanFilter   = process.env.GATE_PLAN_FILTER || '';
+            const touchedSkills    = process.env.TOUCHED_SKILLS || '(none)';
+            const touchedCount     = process.env.TOUCHED_COUNT || '0';
+            const matchedPlanCount = process.env.MATCHED_PLAN_COUNT || '0';
+            const unmatchedSkills  = process.env.UNMATCHED_SKILLS || '';
+            const skipReason       = process.env.SKIP_REASON || '';
+            const evalResult       = process.env.EVAL_RESULT || 'skipped';
+            const authReady        = process.env.AUTH_READY;
+            const authMode         = process.env.AUTH_MODE;
+            const total            = process.env.TOTAL_COUNT || '0';
+            const completed        = process.env.COMPLETED_COUNT || '0';
+            const errored          = process.env.ERRORED_COUNT || '0';
+            const bailed           = process.env.BAILED_COUNT || '0';
+            const skipped          = process.env.SKIPPED_COUNT || '0';
+
+            let icon, headline, detailLines = [];
+
+            // Decision tree (order matters):
+            //   1. detect said "don't run" -> show skip-reason
+            //   2. eval was skipped at orchestrator level -> warn
+            //   3. auth gate bailed in the called workflow -> auth-skip notice
+            //   4. happy paths (success / failure)
+            if (shouldRunEval !== 'true') {
+              icon = '⏭️';
+              headline = `PR-touched full-eval skipped`;
+              detailLines.push(`**Reason:** ${skipReason || 'detect job declined to run eval.'}`);
+            } else if (evalResult === 'skipped') {
+              icon = '⏭️';
+              headline = `PR-touched full-eval skipped at orchestrator level.`;
+            } else if (evalResult === 'cancelled') {
+              icon = '🟡';
+              headline = `PR-touched full-eval cancelled (likely shared-tenant queue timeout or manual cancel).`;
+            } else if (authReady === 'false') {
+              icon = '⏭️';
+              headline = `PR-touched full-eval skipped -- auth gate not configured (mode: ${authMode || 'skip'}). Configure either Phase A (SP_APP_ID + SP_CERT_BASE64 + SP_OBJECT_ID + TENANT_DOMAIN) or Phase B (AZURE_CLIENT_ID + KV) secrets.`;
+            } else if (evalResult === 'success') {
+              icon = '✅';
+              const testRate = process.env.TEST_PASS_RATE || '';
+              const testPass = process.env.TEST_PASS_COUNT || '0';
+              const testFail = process.env.TEST_FAIL_COUNT || '0';
+              const testSummary = testRate ? ` // tests: ${testPass} pass / ${testFail} fail (${testRate}%)` : '';
+              headline = `PR-touched full-eval passed: ${completed}/${total} plans completed (errored: ${errored}, bailed: ${bailed}, skipped: ${skipped})${testSummary}`;
+            } else if (evalResult === 'failure') {
+              icon = '❌';
+              const testRate = process.env.TEST_PASS_RATE || '';
+              const testPass = process.env.TEST_PASS_COUNT || '0';
+              const testFail = process.env.TEST_FAIL_COUNT || '0';
+              const testSummary = testRate ? ` // tests: ${testPass} pass / ${testFail} fail (${testRate}%)` : '';
+              headline = `PR-touched full-eval FAILED: ${completed}/${total} completed (errored: ${errored}, bailed: ${bailed}, skipped: ${skipped})${testSummary}`;
+            } else {
+              icon = '⚠️';
+              headline = `PR-touched full-eval result: ${evalResult}`;
+            }
+
+            // Surface unmatched skills in EVERY branch (skip, success, failure)
+            // so a PR that touches one covered + one uncovered skill does not
+            // hide the coverage gap behind a green sticky on the covered skill.
+            if (unmatchedSkills) {
+              detailLines.push(`**Touched skills with no eval coverage:** \`${unmatchedSkills}\``);
+            }
+
+            // When an infrastructure change escalated to run-all, the
+            // merge-blocking gate is scoped to the touched skills' plans; other
+            // plans still ran for observability but do not block this PR.
+            // Surface that so a green result showing bailed/errored > 0 in
+            // unrelated plans is not mistaken for a contradiction.
+            if (shouldRunEval === 'true' && runAll === 'true' && gatePlanFilter) {
+              detailLines.push(`**Gate scope:** merge-blocking limited to touched-skill plans \`${gatePlanFilter}\`. All plans ran (run-all from an infrastructure change); bails/errors in other plans are reported above for context but do not block this PR.`);
+            }
+
+            const body = [
+              MARKER,
+              `### ${icon} ${headline}`,
+              ``,
+              `**Run [#${runNumber}](${runUrl})** on commit \`${headSha}\``,
+              `**Touched skills (${touchedCount}):** \`${touchedSkills}\``,
+              `**Matched plans (${matchedPlanCount}):** \`${planFilter}\`` + (runAll === 'true' ? ' _(infrastructure change -- running all plans)_' : ''),
+              ...detailLines.map(l => `${l}`),
+              ``,
+              `[View workflow run](${runUrl}) for per-plan detail and the merged \`eval-results.md\`.`,
+              ``,
+              `<sub>Fresh comment per run while test infrastructure stabilises; design will move to inline + resolvable threads once steady-state quality justifies a quieter pattern.</sub>`,
+            ].join('\n');
+
+            const created = await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body,
+            });
+            core.notice(`Posted PR-touched full-eval comment #${created.data.id} for run #${runNumber} (${evalResult})`);
+
+      # Mirror the eval job's conclusion onto post-comment so the chip on the
+      # run page matches the run's overall state. Without this, a cancelled or
+      # failed eval still rendered post-comment as green ``success`` (since
+      # the comment was posted successfully) which hid the underlying failure
+      # signal from anyone glancing at the Actions UI. ``skipped`` stays green
+      # because detect-declined / orchestrator-skipped is a legitimate no-op.
+      #
+      # Note: ``failure > cancelled`` in run-conclusion precedence, so exiting
+      # non-zero here on ``cancelled`` promotes the overall run conclusion
+      # from ``cancelled`` to ``failure``. This is intentional during the
+      # test-infrastructure stabilisation period -- a cancelled eval (queue
+      # timeout, manual cancel, shared-tenant contention) is signal we want
+      # to surface loudly via the chip, not hide behind the softer
+      # ``cancelled`` conclusion. Revisit if/when steady-state cancel rate
+      # drops to the point where this becomes noisy.
+      - name: Reflect eval result on job status
+        if: always()
+        shell: bash
+        env:
+          EVAL_RESULT: ${{ needs.eval.result }}
+        run: |
+          case "$EVAL_RESULT" in
+            success|skipped)
+              ;;
+            cancelled)
+              echo "::error::Mirroring eval result: cancelled. Post-comment exits non-zero so the chip matches the run."
+              exit 1
+              ;;
+            failure)
+              echo "::error::Mirroring eval result: failure. Post-comment exits non-zero so the chip matches the run."
+              exit 1
+              ;;
+            *)
+              echo "::error::Unexpected eval result: $EVAL_RESULT"
+              exit 1
+              ;;
+          esac

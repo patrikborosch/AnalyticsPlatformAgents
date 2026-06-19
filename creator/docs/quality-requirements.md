@@ -12,6 +12,7 @@ Every skill must pass quality checks before merging. The quality checker validat
 2. **Semantic disambiguation** — Triggers don't conflict with other skills
 3. **Content quality** — Descriptions, examples, code blocks
 4. **Cross-references** — All links resolve to existing files
+5. **Common-infra compliance** — Generic auth/token/tooling guidance is rooted in `common/`
 
 ## Structural Requirements
 
@@ -22,6 +23,9 @@ Every skill must pass quality checks before merging. The quality checker validat
 | YAML frontmatter with `name` and `description` | ✅ Critical | Blocks PR |
 | Description length ≤ 1023 characters | ✅ Critical | Blocks PR |
 | Update notice blockquote | ✅ Critical (except check-updates) | Blocks PR |
+| Markdown files are valid UTF-8 and free of high-confidence mojibake markers | ✅ Critical | Blocks PR |
+| Generic auth/token/sqlcmd setup guidance must reference `common/` | ✅ Critical | Blocks PR |
+| Explicit `Triggers:` field in description (except check-updates) | ⚠️ Warning | Review recommended |
 | Must/Prefer/Avoid sections | ⚠️ Warning | Review recommended |
 | Examples section | ⚠️ Warning | Review recommended |
 | Code blocks with language tags | ⚠️ Warning | Review recommended |
@@ -49,6 +53,13 @@ Required format (blockquote starting with "Update Check"):
 > **Update Check — ONCE PER SESSION (mandatory)**
 > The first time this skill is used in a session, run the **check-updates** skill...
 ```
+
+### Encoding Integrity
+
+Skill markdown must be saved as valid UTF-8 and stay free of obvious mojibake sequences
+such as corrupted em dashes or section signs. The checker looks for a short list of
+high-confidence corruption markers like `ΓÇö`, `ΓÇô`, `ΓåÆ`, and `┬º` so it can block
+broken rendering without flagging normal Unicode punctuation.
 
 ## Semantic Disambiguation
 
@@ -94,6 +105,47 @@ Triggers: "query", "sql", "explore"
 
 # ✅ Specific: routes correctly
 Triggers: "T-SQL query", "query warehouse with sqlcmd", "explore warehouse schema"
+```
+
+### Anti-Trigger Overlap (advisory)
+
+A Sensei-inspired heuristic compares the `Triggers:` field token sets of every skill pair. Pairs whose smaller trigger set is more than half-contained in the other (`|A ∩ B| / min(|A|, |B|) > 0.5`) are reported as `trigger_overlaps` in `quality-report.json`.
+
+| Setting | Default |
+|---|---|
+| Threshold | overlap > 0.5 |
+| Minimum trigger-set size | 3 (smaller sets are skipped to avoid noise) |
+| Severity | WARNING — never blocks merge |
+| Storage | top-level `trigger_overlaps` (separate from `semantic_conflicts` so the existing CRITICAL contract is preserved) |
+
+A reported overlap is **signal**, not a failure: two skills may legitimately cover the same domain. Treat each pair as a prompt to verify the routing intent.
+
+The existing `find_ambiguous_triggers` check runs at the *phrase* granularity (single trigger matches multiple skills). `find_trigger_overlap` runs at the *set* granularity. The whole-description Jaccard similarity matrix runs at the *prose* granularity. All three are useful at different layers — `find_trigger_overlap` catches near-duplicate trigger sets the prose-level matrix demonstrably misses.
+
+Provenance: inspired by the [Sensei skill auto-improver](https://github.com/Azure/azure-sdk-tools/tree/main/.github/skills/sensei). We intentionally adopt only the anti-trigger detector — not the Ralph loop, autonomous mutation, or a description-rubric scorer (the original PR shipped a 5-axis rubric too, but the stylistic axes produced false positives against legitimate descriptions; the one structural axis was folded into the `has_triggers_field` check below).
+
+### Triggers Field Required (warning)
+
+Every skill description (except `check-updates`) must include an explicit `Triggers:` field -- skill routers index on it directly. A description that says "the user can trigger this skill when ..." in prose **does not** satisfy this check; the field must be present verbatim.
+
+The check accepts both the plural `Triggers:` (preferred, used everywhere in this doc) and the legacy singular `Trigger:` (a few older skills still use it). Both pass the check; new skills should use the plural form.
+
+```yaml
+# Good (preferred plural form)
+description: >
+  Execute T-SQL against Fabric Data Warehouse.
+  Use when the user wants to run queries.
+  Triggers: "create warehouse table", "load from ADLS", "COPY INTO".
+
+# Also accepted (legacy singular form, present in a few older skills)
+description: >
+  Execute T-SQL against Fabric Data Warehouse.
+  Trigger: "create warehouse table", "load from ADLS", "COPY INTO".
+
+# Missing field -- emits structural WARNING
+description: >
+  Execute T-SQL against Fabric Data Warehouse. The agent should
+  trigger this skill when the user wants to query a warehouse.
 ```
 
 ## Token Size Limits
@@ -206,6 +258,45 @@ See [COMMON-CLI.md](../common/COMMON-CLI.md)
 
 # ❌ Invalid (file doesn't exist)
 See [MISSING.md](../../common/MISSING.md)
+```
+
+## Common-Infra Compliance
+
+Shared setup belongs in `common/`. Skills can keep endpoint-specific commands and workflows, but generic auth, token, and shared tool guidance must point back to the common docs instead of standing alone.
+
+### Blocking Scope
+
+The current blocking checks focus on two high-drift areas:
+
+1. **Authentication and token guidance**
+   - Examples: `az login`, `az account get-access-token`, generic token-acquisition notes
+   - Must reference shared auth guidance from `COMMON-CORE.md` and `COMMON-CLI.md`
+2. **Shared SQL tooling setup**
+   - Examples: `winget install sqlcmd`, `sqlcmd --version`, "`sqlcmd` not found"
+   - Must reference `COMMON-CLI.md` SQL / TDS guidance
+
+### Examples
+
+```markdown
+# ✅ Good
+- [COMMON-CORE.md](../../common/COMMON-CORE.md) — authentication, token audiences
+- [COMMON-CLI.md](../../common/COMMON-CLI.md) — `az rest`, `az login`, token acquisition
+
+### MUST DO
+- Run `az login` before using CLI auth flows
+```
+
+```markdown
+# ❌ Bad
+### Authentication
+- Run `az login`
+- Acquire a token with `az account get-access-token`
+```
+
+```markdown
+# ❌ Bad
+| `sqlcmd` | `winget install sqlcmd` |
+> sqlcmd --version 2>/dev/null || echo "INSTALL: winget install sqlcmd"
 ```
 
 ## Running Quality Checks

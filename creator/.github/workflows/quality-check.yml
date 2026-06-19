@@ -1,0 +1,482 @@
+name: Skill PR Validation
+
+on:
+  # No `paths:` filter below -- intentional. "Skill PR Validation" is a REQUIRED
+  # status check in branch protection. A path-filtered required check is never
+  # reported on PRs that touch none of the filtered paths (e.g. a compatibility/-,
+  # docs/-, or ReleaseScripts/-only PR), so those PRs stall forever on
+  # "Expected -- Waiting for status to be reported" and can never merge. This job is
+  # a cheap static check (quality_checker + unit tests; no secrets, no live Fabric),
+  # so it runs on every PR and every push to main/master. Do NOT re-add a `paths:`
+  # filter while this check is required -- it reintroduces the merge-blocking gap.
+  pull_request:
+    # ready_for_review lets the draft -> ready transition post the one-time
+    # pre-PR self-run reminder; the other types keep the existing behaviour.
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [ main, master ]
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  pr-validation:
+    runs-on: ubuntu-latest
+    name: ✅ Skill PR Validation
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install PyYAML requests pytest
+
+    - name: Determine coverage base ref
+      id: coverage-base
+      shell: bash
+      run: |
+        # actions/checkout above used fetch-depth: 0 (full history of every branch).
+        # We refresh the base tip but deliberately avoid `--depth=1`, which would
+        # turn origin/<base> into a shallow ref and break merge-base lookup in
+        # `git diff base...HEAD` for branches that diverged a few commits ago.
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          git fetch origin "${{ github.base_ref }}" --no-tags
+          echo "base_ref=origin/${{ github.base_ref }}" >> "$GITHUB_OUTPUT"
+        else
+          echo "base_ref=" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Run quality checker
+      id: quality
+      continue-on-error: true
+      run: |
+        python .github/workflows/quality_checker.py
+
+    - name: Run semantic pytest
+      id: semantic-pytest
+      continue-on-error: true
+      run: |
+        python -m pytest tests/test_semantic.py -q
+
+    - name: Run coverage helper unit tests
+      id: coverage-unit-tests
+      continue-on-error: true
+      run: |
+        python -m unittest tests/test_coverage_gap_report.py tests/test_coverage_enforcement.py tests/test_skill_eval_coverage.py tests/test_build_dashboard.py tests/test_weekly_flake_report.py tests/test_setup_test_env.py tests/test_select_plans_for_skills.py tests/test_vally_reliability_scripts.py tests/test_check_public_release_parity.py tests/test_full_eval_watchdog.py -v
+
+    - name: Validate eval.yaml structure (Layer 0 grader minimum)
+      id: eval-yaml-structure
+      continue-on-error: true
+      run: |
+        python -m unittest tests/test_eval_yaml_structure.py -v
+
+    - name: Validate legacy smoke workflows stay manual-dispatch only
+      id: legacy-smoke-triggers
+      continue-on-error: true
+      run: |
+        python -m unittest tests/test_workflow_triggers.py -v
+
+    - name: Validate plugin manifests and eval.yaml MCP declarations are in sync
+      id: eval-yaml-mcp-servers
+      continue-on-error: true
+      run: |
+        python -m unittest tests/test_eval_yaml_mcp_servers.py -v
+
+    - name: Validate Vally native MCP staging end-to-end
+      id: vally-native-mcp-staging
+      continue-on-error: true
+      run: |
+        python -m unittest tests/test_vally_native_mcp_staging.py -v
+
+    - name: Run ownership manifest validation
+      id: ownership
+      continue-on-error: true
+      run: |
+        python -m unittest tests/test_skill_ownership_manifest.py -v
+
+    - name: Check test prompts for skill-name anti-pattern
+      id: prompt-anti-patterns
+      continue-on-error: true
+      run: |
+        python -m unittest tests/test_check_test_prompt_anti_patterns.py -v
+        python .github/scripts/check_test_prompt_anti_patterns.py
+
+    - name: Check Copilot instruction file lengths
+      id: instruction-lengths
+      continue-on-error: true
+      run: |
+        python -m unittest tests/test_check_instruction_lengths.py -v
+        python .github/scripts/check_instruction_lengths.py
+
+    - name: Run smoke detect helper unit tests
+      id: smoke-detect-helper-tests
+      continue-on-error: true
+      run: |
+        python -m unittest tests/test_diff_changed_test_names.py -v
+
+    - name: Run smoke PR comment helper unit tests
+      id: smoke-pr-comment-tests
+      continue-on-error: true
+      run: |
+        node --test tests/test_smoke_pr_comment.js
+
+    - name: Run Vally PR comment helper unit tests
+      id: vally-pr-comment-tests
+      continue-on-error: true
+      run: |
+        node --test tests/test_vally_pr_comment.js
+
+    - name: Validate tests.json plugin field + plugin-index helper
+      id: plugin-field-tests
+      continue-on-error: true
+      run: |
+        # --check fails (exit 1) if the committed marketplace.json files
+        # drift from what build_plugins.py would emit from the per-plugin
+        # manifests. The plugin-to-skills mapping is read directly from
+        # each plugins/<name>/.github/plugin/plugin.json by consumers, so
+        # there is no separate denormalized index file to keep in sync.
+        python build/build_plugins.py --check
+        python -m unittest tests/test_plugin_index_helper.py tests/test_tests_json_plugin_field.py -v
+
+    - name: Run coverage enforcement
+      id: coverage-enforcement
+      continue-on-error: true
+      shell: bash
+      env:
+        BASE_REF: ${{ steps.coverage-base.outputs.base_ref }}
+      run: |
+        if [ -n "$BASE_REF" ]; then
+          python tests/coverage_enforcement.py --base-ref "$BASE_REF" --json-output coverage-enforcement.json
+        else
+          python tests/coverage_enforcement.py --json-output coverage-enforcement.json
+        fi
+
+    - name: Upload validation reports
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: pr-validation-reports
+        path: |
+          quality-report.json
+          coverage-enforcement.json
+        if-no-files-found: error
+        retention-days: 30
+
+    - name: Post sticky PR validation summary
+      if: github.event_name == 'pull_request' && always()
+      uses: actions/github-script@v9
+      env:
+        QUALITY_OUTCOME: ${{ steps.quality.outcome }}
+        SEMANTIC_OUTCOME: ${{ steps.semantic-pytest.outcome }}
+        COVERAGE_UNIT_OUTCOME: ${{ steps.coverage-unit-tests.outcome }}
+        EVAL_YAML_STRUCTURE_OUTCOME: ${{ steps.eval-yaml-structure.outcome }}
+        LEGACY_SMOKE_TRIGGERS_OUTCOME: ${{ steps.legacy-smoke-triggers.outcome }}
+        EVAL_YAML_MCP_SERVERS_OUTCOME: ${{ steps.eval-yaml-mcp-servers.outcome }}
+        VALLY_NATIVE_MCP_STAGING_OUTCOME: ${{ steps.vally-native-mcp-staging.outcome }}
+        OWNERSHIP_OUTCOME: ${{ steps.ownership.outcome }}
+        PROMPT_ANTI_PATTERNS_OUTCOME: ${{ steps.prompt-anti-patterns.outcome }}
+        INSTRUCTION_LENGTHS_OUTCOME: ${{ steps.instruction-lengths.outcome }}
+        SMOKE_DETECT_HELPER_OUTCOME: ${{ steps.smoke-detect-helper-tests.outcome }}
+        SMOKE_PR_COMMENT_OUTCOME: ${{ steps.smoke-pr-comment-tests.outcome }}
+        VALLY_PR_COMMENT_OUTCOME: ${{ steps.vally-pr-comment-tests.outcome }}
+        PLUGIN_FIELD_OUTCOME: ${{ steps.plugin-field-tests.outcome }}
+        COVERAGE_ENFORCEMENT_OUTCOME: ${{ steps.coverage-enforcement.outcome }}
+      with:
+        script: |
+          const fs = require('fs');
+          const marker = '<!-- skills-for-fabric-pr-validation -->';
+
+          const readJsonIfPresent = (path) => {
+            if (!fs.existsSync(path)) {
+              return null;
+            }
+            return JSON.parse(fs.readFileSync(path, 'utf8'));
+          };
+
+          const statusForOutcome = (outcome) => {
+            if (outcome === 'success') return '✅ PASS';
+            if (outcome === 'failure') return '❌ FAIL';
+            return '➖ N/A';
+          };
+
+          const renderCoverageCell = (check) => {
+            const labels = {
+              present: '✅ Present',
+              missing: '❌ Missing',
+              debt: '⚠️ Debt',
+              exempt: '✅ Exempt',
+              'not-required': '➖ Not required',
+            };
+            return labels[check.status] || check.status;
+          };
+
+          const qualityReport = readJsonIfPresent('quality-report.json');
+          const coverageReport = readJsonIfPresent('coverage-enforcement.json');
+          const changedSkills = coverageReport?.changedSkills || [];
+          const summary = coverageReport?.summary || {};
+
+          // Advisory self-run attestation parse (never affects the pass/fail gate).
+          // Returns true (checked), false (present but unchecked), or null (line absent).
+          const prBody = context.payload.pull_request?.body || '';
+          const attestationState = (needle) => {
+            const checkboxLine = prBody
+              .split('\n')
+              .find((l) => /^\s*- \[[ xX]\]/.test(l) && l.includes(needle));
+            if (!checkboxLine) return null;
+            return /^\s*- \[[xX]\]/.test(checkboxLine);
+          };
+          const checkAttested = attestationState('pre-pr-check');
+          const reviewAttested = attestationState('pre-pr-review');
+          const stepOutcomes = [
+            process.env.QUALITY_OUTCOME,
+            process.env.SEMANTIC_OUTCOME,
+            process.env.COVERAGE_UNIT_OUTCOME,
+            process.env.EVAL_YAML_STRUCTURE_OUTCOME,
+            process.env.LEGACY_SMOKE_TRIGGERS_OUTCOME,
+            process.env.EVAL_YAML_MCP_SERVERS_OUTCOME,
+            process.env.VALLY_NATIVE_MCP_STAGING_OUTCOME,
+            process.env.OWNERSHIP_OUTCOME,
+            process.env.PROMPT_ANTI_PATTERNS_OUTCOME,
+            process.env.INSTRUCTION_LENGTHS_OUTCOME,
+            process.env.SMOKE_DETECT_HELPER_OUTCOME,
+            process.env.SMOKE_PR_COMMENT_OUTCOME,
+            process.env.VALLY_PR_COMMENT_OUTCOME,
+            process.env.PLUGIN_FIELD_OUTCOME,
+            process.env.COVERAGE_ENFORCEMENT_OUTCOME,
+          ];
+          const hasFailure = stepOutcomes.includes('failure');
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+
+          let reportContent = `${marker}\n`;
+          reportContent += hasFailure
+            ? '## ❌ Skill PR Validation Summary\n\n'
+            : '## ✅ Skill PR Validation Summary\n\n';
+
+          reportContent += '| Check | Status | Notes |\n';
+          reportContent += '|---|---|---|\n';
+          reportContent += `| Quality checker | ${statusForOutcome(process.env.QUALITY_OUTCOME)} | ${
+            qualityReport
+              ? `${qualityReport.critical_count} critical, ${qualityReport.warning_count} warning(s)`
+              : 'See workflow log'
+          } |\n`;
+          reportContent += `| Semantic pytest | ${statusForOutcome(process.env.SEMANTIC_OUTCOME)} | \`python -m pytest tests/test_semantic.py -q\` |\n`;
+          reportContent += `| Policy helper unit tests | ${statusForOutcome(process.env.COVERAGE_UNIT_OUTCOME)} | coverage, dashboard, weekly flake, setup, select-plans-for-skills, vally reliability, public-release-parity, and full-eval watchdog script tests |\n`;
+          reportContent += `| Eval YAML structure (L0 minimum) | ${statusForOutcome(process.env.EVAL_YAML_STRUCTURE_OUTCOME)} | \`tests/test_eval_yaml_structure.py\` (every \`tests/evals/<skill>/eval.yaml\` stim must have the 8 Layer-0 graders; requires \`tool-calls\` (L1) + \`program\` (L2) for non-grandfathered evals, warns only for grandfathered evals still missing them) |\n`;
+          reportContent += `| Legacy smoke trigger guard | ${statusForOutcome(process.env.LEGACY_SMOKE_TRIGGERS_OUTCOME)} | \`tests/test_workflow_triggers.py\` (forbids re-arming \`schedule\` / \`pull_request\` / \`pull_request_target\` on \`fabric-smoke-{ephemeral,pr-touched}.yml\`; Vally is the primary CI harness) |\n`;
+          reportContent += `| Plugin manifest vs eval.yaml MCP consistency | ${statusForOutcome(process.env.EVAL_YAML_MCP_SERVERS_OUTCOME)} | \`tests/test_eval_yaml_mcp_servers.py\` (skills bundled in MCP-bearing plugins must declare \`environment.mcpServers\` in their eval.yaml; scoped to \`powerbi-modeling-mcp\` for Option C) |\n`;
+          reportContent += `| Vally native MCP staging | ${statusForOutcome(process.env.VALLY_NATIVE_MCP_STAGING_OUTCOME)} | \`tests/test_vally_native_mcp_staging.py\` (end-to-end: \`tests/run-vally-eval.ps1 -DryRun\` rewrites the powerbi-modeling-mcp server with SP cert auth args + env block when \`CI_MCP_OVERLAY=true\`, no-ops otherwise; skips when Node 22+ is unavailable) |\n`;
+          reportContent += `| Ownership manifest validation | ${statusForOutcome(process.env.OWNERSHIP_OUTCOME)} | \`python -m unittest tests/test_skill_ownership_manifest.py -v\` |\n`;
+          reportContent += `| Test prompt anti-patterns | ${statusForOutcome(process.env.PROMPT_ANTI_PATTERNS_OUTCOME)} | \`.github/scripts/check_test_prompt_anti_patterns.py\` (no \`Using the X skill\` in tests/tests.json prompts) |\n`;
+          reportContent += `| Copilot instruction file lengths | ${statusForOutcome(process.env.INSTRUCTION_LENGTHS_OUTCOME)} | \`.github/scripts/check_instruction_lengths.py\` (each file under 4000 chars per Copilot code-review limit) |\n`;
+          reportContent += `| Smoke detect helper unit tests | ${statusForOutcome(process.env.SMOKE_DETECT_HELPER_OUTCOME)} | \`tests/test_diff_changed_test_names.py\` (covers \`.github/scripts/diff_changed_test_names.py\`, the PR-touched smoke targeting helper) |\n`;
+          reportContent += `| Smoke PR comment helper unit tests | ${statusForOutcome(process.env.SMOKE_PR_COMMENT_OUTCOME)} | \`node --test tests/test_smoke_pr_comment.js\` (covers \`.github/scripts/smoke-pr-comment.js\`, the sticky+transition comment helpers) |\n`;
+          reportContent += `| Vally PR comment helper unit tests | ${statusForOutcome(process.env.VALLY_PR_COMMENT_OUTCOME)} | \`node --test tests/test_vally_pr_comment.js\` (covers \`.github/scripts/vally-pr-comment.js\`, the per-run Vally failure-set comment renderer grouped by root-cause class) |\n`;
+          reportContent += `| Plugin field + index helper | ${statusForOutcome(process.env.PLUGIN_FIELD_OUTCOME)} | \`tests/test_tests_json_plugin_field.py\` + \`tests/test_plugin_index_helper.py\` (validates optional \`plugin\` field in tests.json and the \`build/plugin_index.py\` helper that reads each per-plugin manifest directly) |\n`;
+          reportContent += `| Coverage enforcement | ${statusForOutcome(process.env.COVERAGE_ENFORCEMENT_OUTCOME)} | ${
+            coverageReport
+              ? `${summary.violationCount} violation(s), ${summary.changedSkillCount} changed skill(s)`
+              : 'See workflow log'
+          } |\n`;
+          reportContent += '\n';
+
+          if (changedSkills.length > 0) {
+            const label = (v) => (v === true ? 'checked' : v === false ? 'unchecked' : 'missing from body');
+            reportContent += '### Pre-PR self-run attestation\n\n';
+            reportContent += '_Snapshot from the latest pushed commit; if you tick the boxes after this run, it refreshes on your next push._\n\n';
+            if (checkAttested === true && reviewAttested === true) {
+              reportContent += '- ✅ Author attested running `pre-pr-check` and `pre-pr-review` locally before review.\n\n';
+            } else {
+              reportContent += `- ⚠️ Advisory (does not block merge): local pre-PR skills not fully attested -- \`pre-pr-check\`: ${label(checkAttested)}; \`pre-pr-review\`: ${label(reviewAttested)}. Run both locally and tick their boxes in the PR description.\n\n`;
+            }
+          }
+
+          reportContent += '### Contribution requirements\n\n';
+          if (changedSkills.length > 0) {
+            reportContent += '| Skill | Scope | Ownership | Vally eval | Individual eval | Combined eval | Smoke (advisory) |\n';
+            reportContent += '|---|---|---|---|---|---|---|\n';
+            for (const skill of changedSkills) {
+              const scope = skill.isNew ? `new ${skill.category}` : `existing ${skill.category}`;
+              reportContent += `| \`${skill.name}\` | ${scope} | ${renderCoverageCell(skill.ownership)} | ${renderCoverageCell(skill.vallyEval)} | ${renderCoverageCell(skill.individualEval)} | ${renderCoverageCell(skill.combinedEval)} | ${renderCoverageCell(skill.smoke)} |\n`;
+            }
+            reportContent += '\n';
+          } else {
+            reportContent += '- No `skills/<name>/` changes were detected in this PR.\n\n';
+          }
+
+          if (coverageReport?.violations?.length) {
+            reportContent += '### Action required\n\n';
+            for (const violation of coverageReport.violations) {
+              reportContent += `- ${violation.message}\n`;
+            }
+            reportContent += '\n';
+          }
+
+          if (coverageReport?.baseline) {
+            reportContent += '### Policy baseline\n\n';
+            if (coverageReport.baseline.vallyEval) {
+              reportContent += `- Vally eval allow-missing: ${coverageReport.baseline.vallyEval.trackedAllowMissing.length} tracked, ${coverageReport.baseline.vallyEval.untrackedMissing.length} untracked, ${coverageReport.baseline.vallyEval.staleAllowMissing.length} stale\n`;
+            }
+            reportContent += `- Individual eval allow-missing: ${coverageReport.baseline.individualEval.trackedAllowMissing.length} tracked, ${coverageReport.baseline.individualEval.untrackedMissing.length} untracked, ${coverageReport.baseline.individualEval.staleAllowMissing.length} stale\n`;
+            reportContent += `- Smoke allow-missing (advisory): ${coverageReport.baseline.smoke.trackedAllowMissing.length} tracked, ${coverageReport.baseline.smoke.untrackedMissing.length} untracked, ${coverageReport.baseline.smoke.staleAllowMissing.length} stale\n\n`;
+          }
+
+          reportContent += '_Artifacts: `quality-report.json` and `coverage-enforcement.json` are uploaded with this workflow run._\n';
+
+          const existingComment = comments.find(
+            (comment) => comment.user.type === 'Bot' && comment.body.includes(marker)
+          );
+
+          if (existingComment) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existingComment.id,
+              body: reportContent,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: reportContent,
+            });
+          }
+
+    - name: Pre-PR self-run prompt when a PR becomes ready
+      # Advisory nudge only: a failure to post the reminder must never fail
+      # validation, so this step is continue-on-error by design. always() lets
+      # it still run on the triggering event if the sticky step above threw
+      # (otherwise a prior-step failure would skip this one-shot prompt).
+      #
+      # Fire when the PR first becomes ready for a reviewer, which is EITHER a
+      # PR opened directly as non-draft, OR a draft flipped to ready. Gating on
+      # the 'ready_for_review' action ALONE misses the common case of a PR
+      # opened directly as ready (that path never emits 'ready_for_review') --
+      # the rest of this repo keys draft-sensitive logic off the
+      # `pull_request.draft == false` state for exactly this reason. The body's
+      # idempotency guard keeps it one-shot across the extra events.
+      if: always() && github.event_name == 'pull_request' && (github.event.action == 'ready_for_review' || (github.event.action == 'opened' && github.event.pull_request.draft == false))
+      continue-on-error: true
+      uses: actions/github-script@v9
+      with:
+        script: |
+          const marker = '<!-- pre-pr-attestation-prompt -->';
+          const { owner, repo } = context.repo;
+          const pull_number = context.issue.number;
+
+          // Only prompt on PRs that actually change skills.
+          const files = await github.paginate(github.rest.pulls.listFiles, {
+            owner, repo, pull_number,
+          });
+          const skillFiles = files.filter((f) => f.filename.startsWith('skills/'));
+          if (skillFiles.length === 0) {
+            return;
+          }
+
+          // Idempotency: do not repost if the prompt already exists.
+          const existing = await github.paginate(github.rest.pulls.listReviewComments, {
+            owner, repo, pull_number,
+          });
+          if (existing.some((c) => c.body && c.body.includes(marker))) {
+            return;
+          }
+
+          // Anchor a file-level (resolvable) review comment on a changed skill
+          // file that still exists at head. A file-level comment at head.sha on
+          // a removed/renamed path can 422, so if every changed skill file was
+          // deleted we skip the nudge entirely (a pure-deletion PR needs none).
+          const target = skillFiles.find((f) => f.status !== 'removed');
+          if (!target) {
+            return;
+          }
+          const body = [
+            marker,
+            '### Pre-PR self-run confirmation',
+            '',
+            'Before a maintainer reviews this PR, please confirm you ran both local skills and they passed:',
+            '',
+            '- `/pre-pr-check` -- quality lint + Vally eval + filtered full-eval for the skills you changed',
+            '- `/pre-pr-review` -- cross-model self-review, with findings addressed',
+            '',
+            'Reply `confirmed` and **resolve this conversation** once both have passed. If CI has not run yet',
+            '(first-time contributors need a maintainer to approve the workflow), this local confirmation lets a',
+            'reviewer triage faster.',
+            '',
+            '_Friendly reminder, not a blocker._',
+          ].join('\n');
+
+          await github.rest.pulls.createReviewComment({
+            owner, repo, pull_number,
+            commit_id: context.payload.pull_request.head.sha,
+            path: target.filename,
+            subject_type: 'file',
+            body,
+          });
+
+    - name: Fail if required validation failed
+      if: always()
+      shell: bash
+      env:
+        QUALITY_OUTCOME: ${{ steps.quality.outcome }}
+        SEMANTIC_OUTCOME: ${{ steps.semantic-pytest.outcome }}
+        COVERAGE_UNIT_OUTCOME: ${{ steps.coverage-unit-tests.outcome }}
+        EVAL_YAML_STRUCTURE_OUTCOME: ${{ steps.eval-yaml-structure.outcome }}
+        LEGACY_SMOKE_TRIGGERS_OUTCOME: ${{ steps.legacy-smoke-triggers.outcome }}
+        EVAL_YAML_MCP_SERVERS_OUTCOME: ${{ steps.eval-yaml-mcp-servers.outcome }}
+        VALLY_NATIVE_MCP_STAGING_OUTCOME: ${{ steps.vally-native-mcp-staging.outcome }}
+        OWNERSHIP_OUTCOME: ${{ steps.ownership.outcome }}
+        PROMPT_ANTI_PATTERNS_OUTCOME: ${{ steps.prompt-anti-patterns.outcome }}
+        INSTRUCTION_LENGTHS_OUTCOME: ${{ steps.instruction-lengths.outcome }}
+        SMOKE_DETECT_HELPER_OUTCOME: ${{ steps.smoke-detect-helper-tests.outcome }}
+        SMOKE_PR_COMMENT_OUTCOME: ${{ steps.smoke-pr-comment-tests.outcome }}
+        VALLY_PR_COMMENT_OUTCOME: ${{ steps.vally-pr-comment-tests.outcome }}
+        PLUGIN_FIELD_OUTCOME: ${{ steps.plugin-field-tests.outcome }}
+        COVERAGE_ENFORCEMENT_OUTCOME: ${{ steps.coverage-enforcement.outcome }}
+      run: |
+        failures=0
+        for outcome in \
+          "$QUALITY_OUTCOME" \
+          "$SEMANTIC_OUTCOME" \
+          "$COVERAGE_UNIT_OUTCOME" \
+          "$EVAL_YAML_STRUCTURE_OUTCOME" \
+          "$LEGACY_SMOKE_TRIGGERS_OUTCOME" \
+          "$EVAL_YAML_MCP_SERVERS_OUTCOME" \
+          "$VALLY_NATIVE_MCP_STAGING_OUTCOME" \
+          "$OWNERSHIP_OUTCOME" \
+          "$PROMPT_ANTI_PATTERNS_OUTCOME" \
+          "$INSTRUCTION_LENGTHS_OUTCOME" \
+          "$SMOKE_DETECT_HELPER_OUTCOME" \
+          "$SMOKE_PR_COMMENT_OUTCOME" \
+          "$VALLY_PR_COMMENT_OUTCOME" \
+          "$PLUGIN_FIELD_OUTCOME" \
+          "$COVERAGE_ENFORCEMENT_OUTCOME"; do
+          if [ "$outcome" = "failure" ]; then
+            failures=$((failures + 1))
+          fi
+        done
+
+        if [ "$failures" -gt 0 ]; then
+          echo "One or more required validation steps failed."
+          exit 1
+        fi

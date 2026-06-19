@@ -1,0 +1,165 @@
+# Vally eval config -- migrated from tests/tests.json (skills-for-fabric)
+# Source stimuli: activator-consumption-list-baseline, activator-consumption-show-alerts-routing,
+#   activator-consumption-inspect-alert-routing
+#
+# Known gap: prompts contain {{WORKSPACE}} placeholder substituted at runtime by
+# tests/run-vally-eval.ps1. See tests/evals/README.md for local-run instructions.
+
+name: activator-consumption-cli-integration-eval
+description: |
+  Integration evaluation for activator-consumption-cli -- verifies listing,
+  showing alerts, and inspecting Activator items with correct skill routing.
+
+tags:
+  type: integration
+  skill: activator-consumption-cli
+
+environment:
+  skills:
+    - ../../../skills/activator-consumption-cli
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- activator-consumption-list-baseline --
+  - name: "List Activator items and find named item"
+    prompt: |
+      List all Activator items in the {{WORKSPACE}} workspace and show me the
+      one named 'SkillsTestActivator'. Only use the specified workspace. If not
+      found, report an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: activator
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - activator-authoring-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - activator-consumption-cli
+          disallowed:
+            - activator-authoring-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "SkillsTestActivator"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- activator-consumption-show-alerts-routing --
+  - name: "Show alerts and summarize Activator items"
+    prompt: |
+      Show my alerts in the {{WORKSPACE}} workspace and summarize the Activator
+      items you find. Only use the specified workspace. If none are found,
+      report that clearly. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: activator
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - activator-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "SkillsTestActivator"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- activator-consumption-inspect-alert-routing --
+  - name: "Inspect specific Activator item details"
+    prompt: |
+      Inspect this alert named 'SkillsTestActivator' in the {{WORKSPACE}}
+      workspace and show its Activator item details. Only use the specified
+      workspace. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: activator
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - activator-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "SkillsTestActivator"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50

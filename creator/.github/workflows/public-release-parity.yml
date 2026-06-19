@@ -1,0 +1,46 @@
+name: Public Release Parity
+
+# Weekly BACKSTOP for the "Phase 2 skipped" failure mode: PublishToPublic.ps1
+# Phase 1 (content PR) merges to microsoft/skills-for-fabric, but Phase 2
+# (-PublishRelease = tag + GitHub Release) is never run, leaving the public repo
+# with shipped content but no release/tag (happened for v0.3.2 and v0.3.3).
+#
+# The PRIMARY guard is the synchronous parity gate in PublishToPublic.ps1 Phase 1,
+# which blocks the next publish until the prior release exists. That gate cannot
+# catch the LATEST release (nothing publishes after it), so this weekly job is the
+# safety net for exactly that trailing case: it reads the public repo's
+# package.json version + releases (read-only; default GITHUB_TOKEN) and, when the
+# shipped version has no matching release, opens a tracking issue on THIS repo --
+# and auto-closes it once the release exists. Runs with --no-fail-on-gap so the
+# job stays green (the issue is the signal) instead of nagging red every week.
+# Detector, not an auto-healer: no push to the public repo, no extra secrets.
+
+on:
+  schedule:
+    # Mondays 13:00 UTC -- weekly safety net for a missed LATEST-release tag.
+    - cron: '0 13 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  public-release-parity:
+    runs-on: ubuntu-latest
+    name: Public Release Parity Check
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Check public release parity
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python .github/scripts/check_public_release_parity.py --no-fail-on-gap

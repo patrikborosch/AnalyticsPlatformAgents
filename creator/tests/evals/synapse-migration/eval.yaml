@@ -1,0 +1,145 @@
+# Vally eval config -- migrated from tests/tests.json (skills-for-fabric)
+# Source stimuli: synapse-migration-routing, synapse-migration-lake-database-routing
+#
+# Known gap: prompts contain {{WORKSPACE}} placeholder substituted at runtime by
+# tests/run-vally-eval.ps1. See tests/evals/README.md for local-run instructions.
+
+name: synapse-migration-integration-eval
+description: |
+  Integration evaluation for synapse-migration -- positive routing canaries for Spark and Lake Database migration phases. Both stimuli are routing-tier (no Fabric calls); they verify the skill is reached for migration-shaped prompts.
+
+tags:
+  type: integration
+  skill: synapse-migration
+
+environment:
+  skills:
+    - ../../../skills/synapse-migration
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- synapse-migration-routing --
+  # Source: tests/tests.json (area=synapse-migration)
+  - name: "Routing positive -- Spark migration phases"
+    prompt: |
+      I want to migrate a Synapse Analytics workspace to Fabric. The workspace has 2 Spark pools, 5 notebooks, and 3 Spark Job Definitions. Walk me through the migration phases and what needs to happen in each phase.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: synapse-migration
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - spark-authoring-cli
+        - spark-consumption-cli
+        - spark-operations-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - synapse-migration
+          disallowed:
+            - spark-authoring-cli
+            - spark-consumption-cli
+            - spark-operations-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "Phase 0"
+      - type: output-contains
+        config:
+          substring: "Spark Pool"
+      - type: output-contains
+        config:
+          substring: "Environment"
+      - type: output-contains
+        config:
+          substring: "Phase 1"
+      - type: output-contains
+        config:
+          substring: "Phase 2"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- synapse-migration-lake-database-routing --
+  # Source: tests/tests.json (area=synapse-migration)
+  - name: "Routing positive -- Lake Database to Lakehouse migration"
+    prompt: |
+      I need to migrate Synapse Lake Databases to Fabric Lakehouses. The databases have managed and external tables pointing to ADLS Gen2. How do I migrate the metadata and set up shortcuts?
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: synapse-migration
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - sqldw-consumption-cli
+        - dataflows-consumption-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - synapse-migration
+          disallowed:
+            - sqldw-consumption-cli
+            - dataflows-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "Lake Database"
+      - type: output-contains
+        config:
+          substring: "Lakehouse"
+      - type: output-contains
+        config:
+          substring: "shortcut"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50

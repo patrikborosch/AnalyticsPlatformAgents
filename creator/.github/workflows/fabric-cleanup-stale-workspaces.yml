@@ -1,0 +1,128 @@
+name: Fabric Cleanup Stale Test Workspaces
+
+# Daily backstop for ephemeral workspaces that escaped the primary cleanup
+# path. The primary path lives in the `summarise` job of fabric-smoke-vally.yml:
+# after every shard finishes (success or fail), summarise issues one
+# DELETE /v1/workspaces/{id} against the shared workspace that `setup`
+# provisioned. This cron catches the cases that primary cleanup can never
+# reach: cancelled runs (cancel-in-progress kills summarise too), runner
+# crashes before summarise runs, or partial provisioning leaks.
+#
+# Daily (not hourly) because the primary path covers the happy path and
+# every non-cancelled failure. Hourly added ~5 min of CI time x 24 = ~120
+# min/day for what is now a rare backstop. 08:00 UTC = 10:00 IDT so the
+# on-call sees results during morning triage; 6h cutoff still bounds the
+# worst-case leak window to <30 workspaces.
+on:
+  schedule:
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'List stale workspaces without deleting them.'
+        required: false
+        type: boolean
+        default: true
+      cutoff-hours:
+        description: 'Delete skills-for-fabric-test-* workspaces older than this many hours.'
+        required: false
+        default: '6'
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: fabric-cleanup-stale-workspaces
+  cancel-in-progress: false
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.gate.outputs.ready }}
+      mode: ${{ steps.gate.outputs.mode }}
+    steps:
+      - name: Detect cleanup auth mode
+        id: gate
+        shell: bash
+        env:
+          SP_APP_ID: ${{ secrets.SP_APP_ID }}
+          SP_CERT_BASE64: ${{ secrets.SP_CERT_BASE64 }}
+          SP_OBJECT_ID: ${{ secrets.SP_OBJECT_ID }}
+          TENANT_DOMAIN_SECRET: ${{ secrets.TENANT_DOMAIN }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          FABRIC_SMOKE_KV_NAME: ${{ vars.FABRIC_SMOKE_KV_NAME }}
+        run: |
+          set -euo pipefail
+          phaseA_ok=true
+          for v in SP_APP_ID SP_CERT_BASE64 SP_OBJECT_ID TENANT_DOMAIN_SECRET; do
+            if [ -z "${!v}" ]; then phaseA_ok=false; break; fi
+          done
+          phaseB_ok=true
+          for v in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID FABRIC_SMOKE_KV_NAME; do
+            if [ -z "${!v}" ]; then phaseB_ok=false; break; fi
+          done
+          if [ "$phaseA_ok" = "true" ]; then
+            echo "::notice::Using Phase A (direct secrets) auth path."
+            echo "mode=phaseA" >> "$GITHUB_OUTPUT"
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          elif [ "$phaseB_ok" = "true" ]; then
+            echo "::notice::Using Phase B (OIDC + Key Vault) auth path."
+            echo "mode=phaseB" >> "$GITHUB_OUTPUT"
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Neither Phase A nor Phase B Fabric auth is configured. Cleanup cannot run."
+            echo "mode=skip" >> "$GITHUB_OUTPUT"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  cleanup:
+    needs: [setup]
+    if: needs.setup.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs['dry-run'] || 'false' }}
+      CUTOFF_HOURS: ${{ github.event_name == 'workflow_dispatch' && inputs['cutoff-hours'] || '6' }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Authenticate to Fabric tenant
+        uses: ./.github/actions/vally-fabric-auth
+        with:
+          mode: ${{ needs.setup.outputs.mode }}
+          sp-app-id: ${{ secrets.SP_APP_ID }}
+          sp-cert-base64: ${{ secrets.SP_CERT_BASE64 }}
+          sp-object-id: ${{ secrets.SP_OBJECT_ID }}
+          tenant-domain: ${{ secrets.TENANT_DOMAIN }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          kv-name: ${{ vars.FABRIC_SMOKE_KV_NAME }}
+
+      - name: Delete stale smoke workspaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          # shellcheck source=../scripts/retry.sh
+          source "${GITHUB_WORKSPACE}/.github/scripts/retry.sh"
+          dry_run_arg=()
+          if [ "$DRY_RUN" = "true" ]; then
+            dry_run_arg=(--dry-run)
+          elif [ "$DRY_RUN" != "false" ]; then
+            echo "::error::DRY_RUN must be true or false (got '$DRY_RUN')"
+            exit 1
+          fi
+          # Login as the same service principal used by the smoke harness, then
+          # let the Python helper acquire a Fabric-scoped access token via az.
+          retry az login --service-principal --tenant "$TENANT_DOMAIN" --username "$SP_APP_ID" --certificate "$SP_CERT_PATH" --allow-no-subscriptions
+          retry python .github/scripts/cleanup_stale_fabric_workspaces.py \
+            --cutoff-hours "$CUTOFF_HOURS" \
+            "${dry_run_arg[@]}"

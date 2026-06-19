@@ -1,0 +1,278 @@
+# Vally eval config -- Layer 0 migration from tests/tests.json (skills-for-fabric)
+# Source stimuli: semantic-model-refresh, semantic-model-rename,
+# semantic-model-ai-readiness, semantic-model-permissions, plus relocated orphan
+# stimulus from deleted tests/evals/powerbi-authoring-cli.
+# Known gap: prompts contain {{WORKSPACE}} placeholder substituted at runtime by
+# tests/run-vally-eval.ps1. See tests/evals/README.md for local-run instructions.
+
+name: semantic-model-authoring-integration-eval
+description: |
+  Integration evaluation for semantic-model-authoring -- Layer 0 coverage for
+  refresh, rename, AI readiness, permissions, and the relocated refresh-history
+  orphan from the retired powerbi-authoring-cli eval.
+
+tags:
+  type: integration
+  skill: semantic-model-authoring
+
+environment:
+  skills:
+    - ../../../skills/semantic-model-authoring
+  mcpServers:
+    powerbi-modeling-mcp:
+      type: stdio
+      command: npx
+      args:
+        - "-y"
+        - "@microsoft/powerbi-modeling-mcp@latest"
+        - "--start"
+      timeout: 2m
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+
+  # -- semantic-model-refresh (merged with powerbi-authoring-refresh relocated orphan) --
+  # Source: tests/tests.json (area=powerbi). Prompt + assertions ported from
+  # PR #307 (workload-team-authored), which replaced the legacy
+  # "expectedResults" substring checks on agent narrative with verifiable
+  # tool-trace markers (ViaApi, Completed) plus the wall-clock recency
+  # assertion that the original eval cared about.
+  # TODO(<team>): calibrate constraints over first 1-2 weeks; pilot defaults inherited from eventhouse-authoring-cli
+  - name: "Refresh semantic model and inspect history"
+    prompt: |
+      Connect to the semantic model nyctaxi_yellow_directlake in the {{WORKSPACE}} workspace. Trigger a refresh of the model, then retrieve and display its refresh history. If the most recent refresh occurred less than one minute ago, print 'refreshed < 1 min ago.' Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: powerbi
+      flaky: "true"
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - semantic-model-consumption
+        - fabriciq
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - semantic-model-authoring
+          disallowed:
+            - semantic-model-consumption
+            - fabriciq
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      # Two assertions on one stim: the refresh-via-API call AND the
+      # narrative about the recent refresh time. Previously two stims
+      # with identical prompts; merged to halve trial count + token cost.
+      - type: output-matches
+        config:
+          pattern: "(?i)\\bViaApi\\b"
+      - type: output-matches
+        config:
+          pattern: "(?i)refreshed\\s+<\\s*1\\s+min\\s+ago"
+      # expectedResults parity with smoke
+      - type: output-contains
+        config:
+          substring: "Completed"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- semantic-model-modify (renamed from semantic-model-rename) --
+  # Source: tests/tests.json (area=powerbi), reshaped per PR #307. The
+  # legacy prompt opened with "Connect to..." which the agent treats as
+  # a direct instruction to call the MCP connection_operations tool,
+  # bypassing the skill. PR #307 rewrote the prompt to lead with
+  # the action ("Apply the naming convention best practices to...") so
+  # the agent enters via the skill first. Assertions also moved from
+  # narrative-prose substrings (Measures renamed / Columns renamed) to
+  # tool-trace markers that survive natural-language paraphrasing.
+  # TODO(<team>): calibrate constraints over first 1-2 weeks; pilot defaults inherited from eventhouse-authoring-cli
+  - name: "Apply semantic model naming conventions"
+    prompt: |
+      Apply the naming convention best practices to semantic model 'nyctaxi_yellow_directlake' in the {{WORKSPACE}} workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: powerbi
+      flaky: "true"
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - semantic-model-consumption
+        - fabriciq
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - semantic-model-authoring
+          disallowed:
+            - semantic-model-consumption
+            - fabriciq
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          pattern: "(?i)\\btable_operations\\b"
+      # expectedResults parity with smoke (PR #307 shape)
+      - type: output-contains
+        config:
+          substring: "measure_operations"
+      - type: output-contains
+        config:
+          substring: "column_operations"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- semantic-model-ai-readiness --
+  # Source: tests/tests.json (area=powerbi)
+  # TODO(<team>): calibrate constraints over first 1-2 weeks; pilot defaults inherited from eventhouse-authoring-cli
+  - name: "Prepare semantic model for AI consumption"
+    prompt: |
+      Prepare the semantic model nyctaxi_yellow_directlake in the {{WORKSPACE}} workspace for AI consumption.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: powerbi
+      flaky: "true"
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - semantic-model-consumption
+        - fabriciq
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - semantic-model-authoring
+          disallowed:
+            - semantic-model-consumption
+            - fabriciq
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          pattern: "(?i)AI readiness steps suggested"
+      # expectedResults parity with smoke
+      - type: output-contains
+        config:
+          substring: "Semantic model modified"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- semantic-model-set-permissions (renamed from semantic-model-permissions) --
+  # Source: tests/tests.json (area=powerbi), reshaped per PR #307. Legacy
+  # prompt was identical; only the expectedResults moved from narrative
+  # substrings (Principal Type / Identifier / Permission) to the more
+  # robust tool-trace marker (az rest) that PR #307 settled on.
+  # TODO(<team>): calibrate constraints over first 1-2 weeks; pilot defaults inherited from eventhouse-authoring-cli
+  - name: "List semantic model user permissions"
+    prompt: |
+      List user permissions of semantic model nyctaxi_yellow_directlake in the {{WORKSPACE}}.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: powerbi
+      flaky: "true"
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - semantic-model-consumption
+        - fabriciq
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - semantic-model-authoring
+          disallowed:
+            - semantic-model-consumption
+            - fabriciq
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          pattern: "(?i)\\baz\\s+rest\\b"
+      # expectedResults parity with smoke (PR #307 shape: agent invokes
+      # the Fabric REST permissions API via az rest rather than narrating
+      # rendered table headers).
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50

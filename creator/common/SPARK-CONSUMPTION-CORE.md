@@ -18,7 +18,7 @@ Consumption and authoring workflows often overlap. This document covers what is 
 | Lakehouse creation and deployment | `SPARK-AUTHORING-CORE.md` Lakehouse Management |
 | Notebook deployment and job execution | `SPARK-AUTHORING-CORE.md` Notebook Management, Notebook Execution & Job Management |
 | CI/CD and infrastructure automation | `SPARK-AUTHORING-CORE.md` CI/CD & Automation Patterns, Infrastructure-as-Code |
-| **Livy session management and configuration** | **This document — Livy Session Management** |
+| **Lakehouse Livy session management and configuration** | **This document — Lakehouse Livy Session Management** |
 | **Interactive data exploration via Livy** | **This document — Interactive Data Exploration** |
 | **Cross-lakehouse analytics and performance** | **This document — PySpark Analytics Patterns** |
 
@@ -26,7 +26,7 @@ Consumption and authoring workflows often overlap. This document covers what is 
 
 ## Data Engineering Consumption Capability Matrix
 
-| Capability | Livy Session | Direct SQL | Notebook Output | Data Pipeline |
+| Capability | Lakehouse Livy Session | Direct SQL | Notebook Output | Data Pipeline |
 |---|---|---|---|---|
 | Interactive queries | ✅ | ✅ | ❌ | ❌ |
 | Real-time exploration | ✅ | ✅ | ❌ | ❌ |
@@ -132,7 +132,9 @@ https://onelake.table.fabric.microsoft.com/delta/{workspaceId}/{lakehouseId}/api
 
 ---
 
-## Livy Session Management
+## Lakehouse Livy Session Management
+
+> **Lakehouse Livy sessions vs Notebook Spark sessions** — This section covers **Lakehouse Livy sessions**, created via the public Livy API endpoint (`/lakehouses/{lhId}/livyapi/.../sessions`) for ad-hoc interactive Spark execution from remote clients. **Notebook Spark sessions** are a different mechanism — they are created internally when a Fabric Notebook runs (via portal or Jobs API `RunNotebook`) and are managed by the notebook execution lifecycle, not the Livy API. For notebook execution, see `SPARK-AUTHORING-CORE.md` § Notebook Execution & Job Management.
 
 ### Session Creation
 

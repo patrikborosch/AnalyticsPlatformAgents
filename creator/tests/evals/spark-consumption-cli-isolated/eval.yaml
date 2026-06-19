@@ -1,0 +1,83 @@
+# Vally eval config -- COMPOSITION MATRIX PAIR
+# This is a variant of spark-consumption-cli/eval.yaml with RESTRICTED skill loading.
+# Purpose: test hypothesis that spark 4/5 routing failure is caused by
+# spark-authoring-cli presence in the skill set.
+#
+# Difference from spark-consumption-cli/eval.yaml:
+#   - environment.skills lists ONLY spark-consumption-cli (not the full skills/ root)
+#   - Uses `--skill-dir` override when invoked (wrapper handles this)
+#
+# If this eval achieves 5/5 routing while the standard one stays at 1/5,
+# it confirms the description overlap between spark-consumption-cli and
+# spark-authoring-cli causes mis-routing.
+
+name: spark-consumption-cli-isolated-eval
+description: |
+  Composition matrix variant -- same stimulus as spark-consumption-cli but with
+  ONLY spark-consumption-cli loaded (no spark-authoring-cli). Tests routing
+  hypothesis: agent mis-routes due to description overlap with authoring skill.
+
+tags:
+  type: composition
+  skill: spark-consumption-cli-isolated
+  variant: isolated
+  # Linkage: the underlying skill under test is spark-consumption-cli (see variant)
+
+environment:
+  skills:
+    - ../../../skills/spark-consumption-cli
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # Same stimulus as spark-consumption-cli/eval.yaml
+  - name: "Livy session sanity calculation (isolated)"
+    prompt: |
+      In Fabric, i have a lakehouse in the {{WORKSPACE}} workspace - named
+      LSEGDemo. Create a Livy session and run a simple calculation: 123+589.
+      Only use the specified workspace. If not found, report an error.
+      Do NOT search or use any other workspace.
+    tags:
+      type: composition
+      tier: smoke
+      cost: llm
+      area: spark
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - spark-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "712"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
