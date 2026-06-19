@@ -1,0 +1,191 @@
+# Vally eval config -- migrated from tests/tests.json (skills-for-fabric)
+# Source stimulus: eventhouse-authoring-create-table
+# Pattern reference: microsoft/GitHub-Copilot-for-Azure#2235
+#
+# Known gap: prompts contain {{WORKSPACE}} placeholder substituted at runtime by
+# tests/run-vally-eval.ps1. See tests/evals/README.md for local-run instructions.
+
+name: eventhouse-authoring-cli-integration-eval
+description: |
+  Integration evaluation for eventhouse-authoring-cli -- verifies KQL table
+  creation with idempotent .create-merge pattern and retention policy.
+
+tags:
+  type: integration
+  skill: eventhouse-authoring-cli
+
+environment:
+  skills:
+    - ../../../skills/eventhouse-authoring-cli
+  files:
+    - src: ../_graders
+      dest: tests/evals/_graders
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- eventhouse-authoring-create-table --
+  - name: "Create idempotent KQL table with retention"
+    prompt: |
+      In the {{WORKSPACE}} workspace, I need to create a KQL table named
+      exactly `IoTSensorReadings` (case-sensitive) in my Fabric Eventhouse
+      to store IoT sensor readings. The table should have columns for
+      Timestamp (datetime), DeviceId (string), Temperature (real), Humidity
+      (real), and Location (string). Create an idempotent KQL table definition
+      with a 30-day retention policy. The script should be safe to re-run. Only
+      use the specified workspace. If not found, report an error. Do NOT search
+      or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: eventhouse
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - eventhouse-consumption-cli
+    graders:
+      # ----------------------------------------------------------------
+      # Layer 0 -- baseline narrative / metric checks (Vally built-ins).
+      # Cheap, run on every PR. Catch crashes and gross budget overruns.
+      # ----------------------------------------------------------------
+      - type: skill-invocation
+        config:
+          required:
+            - eventhouse-authoring-cli
+          disallowed:
+            - eventhouse-consumption-cli
+      - type: completed
+
+      # ----------------------------------------------------------------
+      # Layer 1 -- canonical Fabric REST surface assertion (Vally
+      # built-in tool-calls). Proves the agent ATTEMPTED the right
+      # operations and avoided wrong-shaped ones. Patterns are grounded
+      # in real production trajectories, not invented.
+      # ----------------------------------------------------------------
+      - type: tool-calls
+        name: tool-calls-eventhouse-create-table
+        config:
+          # The shell-tool name regex appears at 6 sites in this block
+          # (3 required + 3 disallowed) and MUST stay byte-identical
+          # across all 6. Maintained as a YAML anchor &shell_tool so a
+          # future addition (e.g. functions.zsh, new copilot tool name)
+          # edits one place. Do not hand-roll a shorter list at any
+          # site -- the 6-alternation list matches the canonical set
+          # documented in tests/evals/README.md and skipping any one
+          # leaves a real-trajectory mode silently un-asserted.
+          required:
+            # Fabric workspace discovery. --method and the URL can appear
+            # in either order on argv; match both. (?i) makes argv
+            # keywords (az, rest, --method GET, etc.) case-insensitive --
+            # the case-sensitivity contract on the table NAME is enforced
+            # by the Layer 2 verifier (Get-CslSchemaForTable -cne match),
+            # not by argv-keyword pattern matching.
+            - name: &shell_tool '(?i)^(bash|powershell|shell|run_in_terminal|functions\.bash|functions\.powershell)$'
+              command: '(?is)\baz\s+rest\b(?:.*?--method\s+get\b.*?https://api\.fabric\.microsoft\.com/v1/workspaces\b|.*?https://api\.fabric\.microsoft\.com/v1/workspaces\b.*?--method\s+get\b)'
+            # KQL database discovery.
+            - name: *shell_tool
+              command: '(?is)\baz\s+rest\b(?:.*?--method\s+get\b.*?https://api\.fabric\.microsoft\.com/v1/workspaces/[^/\s]+/kqlDatabases\b|.*?https://api\.fabric\.microsoft\.com/v1/workspaces/[^/\s]+/kqlDatabases\b.*?--method\s+get\b)'
+            # KQL management endpoint POST -- anchored on /v1/rest/mgmt
+            # within an az rest command, NOT on bare ".create-merge"
+            # text (which would match cat-ing a schema.kql file or
+            # planning text).
+            - name: *shell_tool
+              command: '(?is)\baz\s+rest\b(?:.*?--method\s+post\b.*?/v1/rest/mgmt\b|.*?/v1/rest/mgmt\b.*?--method\s+post\b)'
+          disallowed:
+            # Disallow public Fabric /v2/ paths only (not ARM /v2/ or
+            # arbitrary docs URLs). Anchor to api.fabric.microsoft.com host.
+            - name: *shell_tool
+              command: '(?is)https://api\.fabric\.microsoft\.com/v2/'
+            # executeQuery is a SQL-endpoint construct; not appropriate here.
+            - name: *shell_tool
+              command: '(?is)\bexecuteQuery\b'
+            # Updating the KQL database item itself (PUT/PATCH on the item)
+            # is the wrong shape -- table ops happen via /v1/rest/mgmt
+            # KQL commands, not REST PATCHes on the database resource.
+            - name: *shell_tool
+              command: '(?is)\b(PUT|PATCH)\b.+/kqlDatabases/[^/\s]+\b(?!.*ingestionMappings)'
+
+      # ----------------------------------------------------------------
+      # Layer 2 -- live-Fabric program verifier. Calls az rest from the
+      # verifier script to assert the table really exists with the
+      # correct schema AND the requested 30-day retention policy.
+      # ----------------------------------------------------------------
+      - type: program
+        name: verify-iot-sensor-readings-table
+        config:
+          program: pwsh
+          args:
+            - -NoProfile
+            - -ExecutionPolicy
+            - Bypass
+            - -File
+            - tests/evals/_graders/eventhouse-authoring-cli/verify-iot-sensor-readings-table.ps1
+          # Polling deadline (60s default) + retention probe + diagnostic
+          # dump headroom. Worst-case math:
+          #   60s polling (DEFAULT_POLL_DEADLINE_SECONDS)
+          # + 10s az login + tenant cert reload buffer
+          # + 30s slow-tenant retention policy fetch (worst observed: 23s)
+          # + 30s diagnostic dump on failure (workspace list + 2 az probes)
+          # + 30s azure-cli cold-start headroom on a fresh runner
+          # = 160s ceiling. 180s budget keeps a 20s margin.
+          # 120s was a one-shot trip in CI run 26714454658 -- bumped here
+          # to absorb the slow-tenant tail without flake.
+          timeout: 180s
+          env:
+            FABRIC_WORKSPACE_ID: "{{WORKSPACE_ID}}"
+            EVENTHOUSE_EXPECTED_DATABASE: SkillsTestEventhouse
+            # Single source of truth for poll deadline + interval. The
+            # verifier throws if either env var is missing (no silent
+            # local default to drift from this value).
+            VALLY_GRADER_POLL_DEADLINE_SECONDS: "60"
+            VALLY_GRADER_POLL_INTERVAL_SECONDS: "2"
+
+      # ----------------------------------------------------------------
+      # Layer 0 (narrative) -- output-string checks. Cheap belt-and-
+      # suspenders that the agent narrated the right shape. Layer 1+2
+      # are the authoritative signal; these may be relaxed once we add a
+      # Layer 3 LLM-judge for intent grading.
+      # ----------------------------------------------------------------
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          pattern: "(?i)\\.create-merge table"
+      - type: output-matches
+        config:
+          pattern: "(?i)retention"
+      - type: output-matches
+        config:
+          pattern: "(?i)idempotent"
+
+      # ----------------------------------------------------------------
+      # Budget kill-switches (Vally built-in metric-threshold family).
+      # Catch runaway loops and cost blowups.
+      # ----------------------------------------------------------------
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50

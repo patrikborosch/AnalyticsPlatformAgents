@@ -1,0 +1,80 @@
+# Vally eval config -- Layer 0 migration from tests/tests.json (skills-for-fabric)
+# Source stimulus: fabriciq-basic
+# Known gap: prompts contain {{WORKSPACE}} placeholder substituted at runtime by
+# tests/run-vally-eval.ps1. See tests/evals/README.md for local-run instructions.
+
+name: fabriciq-integration-eval
+description: |
+  Integration evaluation for fabriciq -- Layer 0 migration of the Ask Power BI
+  SalesBenchmark report smoke stimulus.
+
+tags:
+  type: integration
+  skill: fabriciq
+
+environment:
+  skills:
+    - ../../../skills/fabriciq
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- fabriciq-basic --
+  # Source: tests/tests.json (area=powerbi)
+  # TODO(<team>): calibrate constraints over first 1-2 weeks; pilot defaults inherited from eventhouse-authoring-cli
+  - name: "Ask Power BI SalesBenchmark total sales"
+    prompt: |
+      Ask Power BI: what is the total sales for year 2023 in the SalesBenchmark report? Discover the artifact and show me the data.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: powerbi
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - semantic-model-consumption
+        - semantic-model-authoring
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - fabriciq
+          disallowed:
+            - semantic-model-consumption
+            - semantic-model-authoring
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          pattern: "(?i)\\bExecuteQuery\\b"
+      # expectedResults parity with smoke
+      - type: output-contains
+        config:
+          substring: "363,742,767"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50

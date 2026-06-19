@@ -57,20 +57,6 @@ if [[ -z "$SERVER_URL" ]]; then
     exit 1
 fi
 
-# Input validation — reject values with shell metacharacters or control sequences
-validate_input() {
-    local name="$1"
-    local value="$2"
-    if [[ "$value" =~ [\;\|\&\$\`\(\)\{\}\<\>\!\#\\] ]]; then
-        echo "Error: $name contains disallowed characters. Only alphanumeric, hyphens, dots, colons, slashes, and underscores are permitted."
-        exit 1
-    fi
-}
-
-validate_input "SERVER_URL" "$SERVER_URL"
-validate_input "SERVER_NAME" "$SERVER_NAME"
-validate_input "AUTH_TYPE" "$AUTH_TYPE"
-
 # Colors
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
@@ -136,9 +122,6 @@ configure_claude() {
     
     # Claude uses command/args format for remote servers
     # Version pinned for security and reproducibility
-    # SECURITY NOTE: npx -y auto-installs packages without confirmation.
-    # Pin the version explicitly and audit @anthropic/mcp-proxy before first use.
-    # Consider pre-installing globally (`npm i -g @anthropic/mcp-proxy@0.1.0`) instead.
     local mcp_proxy_version="0.1.0"  # Update this when upgrading
     local server_config="{\"command\": \"npx\", \"args\": [\"-y\", \"@anthropic/mcp-proxy@$mcp_proxy_version\", \"$SERVER_URL\"]}"
     

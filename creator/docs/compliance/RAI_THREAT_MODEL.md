@@ -424,7 +424,7 @@ cursor.execute("SELECT * FROM customers WHERE name = ?", (user_name,))
 
 In case of security incidents:
 
-1. **Report**: See [SECURITY.md](../SECURITY.md)
+1. **Report**: See [SECURITY.md](../../SECURITY.md)
 2. **Contain**: Disable affected skill/workflow
 3. **Investigate**: Analyze logs, determine scope
 4. **Remediate**: Deploy fix via break-glass procedure

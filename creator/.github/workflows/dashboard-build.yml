@@ -1,0 +1,437 @@
+name: Build smoke dashboard
+
+# Aggregates recent `smoke-results-schema-*` artifacts (produced by
+# `fabric-smoke-ephemeral.yml`) into a static HTML dashboard. The output is
+# both:
+# - deployed to GitHub Pages (stable URL - see the workflow run's
+#   `github-pages` environment for the URL; bookmark once, always shows the
+#   latest aggregation), AND
+# - uploaded as the `smoke-dashboard-html` artifact (90-day retention,
+#   downloadable from the workflow run page; serves as offline/historical
+#   fallback when Pages is unavailable).
+#
+# Pages access is gated by repo permission (the repo is `internal`, so
+# only people who can already read the repo - and therefore the artifact -
+# can view the Pages site). No new data exposure surface.
+
+on:
+  # Re-aggregate after every smoke run OR every full-eval run finishes
+  # (success OR failure). When the full-eval workflow uploads its
+  # `full-eval-results-*` artifact, this workflow picks it up and adds it
+  # to the rendered dashboard. The two trigger types share a single job
+  # (concurrency group below ensures only the latest aggregation wins).
+  workflow_run:
+    workflows:
+      - "Fabric Smoke (Shared Test Tenant)"
+      - "Fabric Smoke (Vally Harness, Shared Test Tenant)"
+      - "Fabric Full-Eval (Shared Test Tenant)"
+    types: [completed]
+  # Daily recompute so the dashboard reflects the rolling 30-day window even
+  # when smoke didn't run in the last 24 hours.
+  schedule:
+    # 06:00 UTC daily = 09:00 IDT. After both nightly smoke (18:00 UTC prior
+    # day) and full-eval (21:00 UTC prior day, runs 3-5h ending ~00-02 UTC)
+    # have completed. Previously 06:17 UTC. The workflow_run trigger above
+    # still re-aggregates immediately when smoke finishes; this scheduled
+    # backstop catches days when smoke didn't run.
+    - cron: '0 6 * * *'
+  # Manual rebuild.
+  workflow_dispatch:
+    inputs:
+      window-days:
+        description: 'Smoke aggregation window in days'
+        required: false
+        default: '30'
+        type: string
+      fulleval-window-days:
+        description: 'Full-eval aggregation window in days'
+        required: false
+        default: '60'
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+# Only one Pages deployment may run at a time. Cancel in-progress so the
+# latest aggregation always wins; never block on a previous deploy.
+#
+# Group name is scoped to this dashboard workflow so future Pages-deploying
+# workflows in this repo don't unintentionally serialize/cancel each other
+# through a generic `pages` group.
+concurrency:
+  group: dashboard-pages-deploy
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build dashboard from recent smoke artifacts
+    runs-on: ubuntu-latest
+    if: github.repository == 'gim-home/skills-for-fabric'
+    # `actions/configure-pages@v5` + `actions/upload-pages-artifact@v3` (called
+    # inside this job) need Pages API access, so the workflow-level
+    # `contents: read` + `actions: read` defaults are not enough -- they cause
+    # `Resource not accessible by integration` and the deploy job is skipped,
+    # leaving the Pages site with no deployment and the stable URL returning
+    # 404 for everyone.
+    #
+    # Note: job-level `permissions:` REPLACES the workflow-level block (it does
+    # not merge), so we have to repeat `actions: read` here -- the build job's
+    # `gh run list` / `gh run download` / `gh api .../actions/...` steps need
+    # it. Without that line, those steps would fail with permission-denied.
+    #
+    # `id-token: write` is intentionally NOT granted here -- only `deploy-pages`
+    # needs OIDC, and it lives in the deploy job below. Keeps least-privilege.
+    permissions:
+      contents: read
+      actions: read
+      pages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+
+      # ------------------------------------------------------------------
+      # Discover recent smoke workflow runs and download their schema
+      # artifacts. We restrict to runs from the last `window-days * 2` days
+      # to bound the download (most runs older than window-days won't be
+      # rendered anyway).
+      # ------------------------------------------------------------------
+      - name: Download recent smoke schema artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WINDOW_DAYS: ${{ github.event.inputs.window-days || '30' }}
+        run: |
+          set -euo pipefail
+          window_days="${WINDOW_DAYS:-30}"
+          # Fetch downloads up to 2x window for safety (artifacts may pre-date the schema work).
+          fetch_horizon=$(( window_days * 2 ))
+          mkdir -p artifacts-in
+          echo "Listing smoke workflow runs (limit 200, last $fetch_horizon days)..."
+          cutoff=$(date -u -d "-$fetch_horizon days" '+%Y-%m-%dT%H:%M:%SZ')
+          # List smoke runs newer than cutoff. Restrict to the default branch
+          # so ad-hoc feature-branch smoke runs don't pollute the team
+          # dashboard (reviewer caught this; otherwise an unmerged PR's smoke
+          # would mix into the published trend).
+          # Do NOT swallow gh CLI failures with `|| true`: an auth/rate-limit
+          # error would silently produce an empty dashboard. Let the command
+          # fail; the empty-runs case is handled by the explicit zero-line
+          # check below.
+          default_branch=$(gh api "repos/${{ github.repository }}" --jq '.default_branch')
+          gh run list \
+            --workflow fabric-smoke-ephemeral.yml \
+            --branch "$default_branch" \
+            --limit 200 \
+            --json databaseId,createdAt,conclusion \
+            --jq "[.[] | select(.createdAt > \"$cutoff\") | .databaseId] | unique | join(\"\n\")" \
+            > run-ids.txt
+
+          if [ ! -s run-ids.txt ]; then
+            echo "No smoke runs found on $default_branch in the last $fetch_horizon days. Empty dashboard expected."
+            exit 0
+          fi
+
+          echo "Found $(wc -l < run-ids.txt) recent smoke run(s) on $default_branch. Downloading schema artifacts..."
+          while IFS= read -r run_id; do
+            [ -z "$run_id" ] && continue
+            # Check the run's artifact list first. We must distinguish three cases:
+            #   (a) success + has matching artifact  -> download
+            #   (b) success + no matching artifact   -> skip (legacy pre-schema run)
+            #   (c) API/permission/transient failure -> fail the step
+            # Using `|| true` to suppress stderr collapses (b) and (c) into the
+            # same code path and can hide auth/rate-limit failures behind an
+            # empty dashboard. Capture the call into a tempfile, propagate
+            # non-zero exit codes, and only treat an empty result as case (b).
+            artifacts_file=$(mktemp)
+            if ! gh api "repos/${{ github.repository }}/actions/runs/$run_id/artifacts" \
+                --jq '.artifacts[] | select(.name | startswith("smoke-results-schema-")) | .name' \
+                > "$artifacts_file"; then
+              echo "::error::gh api failed listing artifacts for run $run_id (auth/rate-limit/transient). Aborting."
+              rm -f "$artifacts_file"
+              exit 1
+            fi
+            artifacts_json=$(cat "$artifacts_file")
+            rm -f "$artifacts_file"
+            if [ -z "$artifacts_json" ]; then
+              echo "  Run $run_id: no smoke-results-schema-* artifact (legacy/skipped)."
+              continue
+            fi
+            echo "  Run $run_id: downloading schema artifact..."
+            gh run download "$run_id" \
+              --pattern 'smoke-results-schema-*' \
+              --dir "artifacts-in/run-$run_id"
+          done < run-ids.txt
+
+          echo
+          echo "Downloaded schema artifacts:"
+          find artifacts-in -name 'testResults.json' -printf '  %p\n' | head -n 30 || true
+          total_results=$(find artifacts-in -name 'testResults.json' | wc -l)
+          echo "Total testResults.json files: $total_results"
+
+      # ------------------------------------------------------------------
+      # Discover recent vally workflow runs and download their schema
+      # artifacts. Mirrors the fabric-smoke-ephemeral loop above but
+      # targets the vally producer's run name. Without this loop the
+      # `smoke-results-schema-vally-*` artifacts the vally summarise job
+      # uploads (60-day retention) would sit unconsumed -- vally rows
+      # would never make it onto the dashboard. Same window + horizon
+      # math as the legacy loop since both feed the same Smoke (legacy)
+      # / Vally tabs sharing one window-days parameter.
+      # ------------------------------------------------------------------
+      - name: Download recent vally schema artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WINDOW_DAYS: ${{ github.event.inputs.window-days || '30' }}
+        run: |
+          set -euo pipefail
+          window_days="${WINDOW_DAYS:-30}"
+          fetch_horizon=$(( window_days * 2 ))
+          mkdir -p artifacts-in
+          echo "Listing vally workflow runs (limit 200, last $fetch_horizon days)..."
+          cutoff=$(date -u -d "-$fetch_horizon days" '+%Y-%m-%dT%H:%M:%SZ')
+          default_branch=$(gh api "repos/${{ github.repository }}" --jq '.default_branch')
+          # Same trade-offs as the legacy loop: do NOT swallow gh failures
+          # with `|| true` (an auth/rate-limit error would silently produce
+          # an empty dashboard slice); list returns 0 lines when no runs
+          # exist.
+          gh run list \
+            --workflow fabric-smoke-vally.yml \
+            --branch "$default_branch" \
+            --limit 200 \
+            --json databaseId,createdAt,conclusion \
+            --jq "[.[] | select(.createdAt > \"$cutoff\") | .databaseId] | unique | join(\"\n\")" \
+            > vally-run-ids.txt
+
+          if [ ! -s vally-run-ids.txt ]; then
+            echo "No vally runs found on $default_branch in the last $fetch_horizon days. Vally tab will be empty until the harness has been default-branch-merged."
+            exit 0
+          fi
+
+          echo "Found $(wc -l < vally-run-ids.txt) recent vally run(s) on $default_branch. Downloading schema artifacts..."
+          while IFS= read -r run_id; do
+            [ -z "$run_id" ] && continue
+            artifacts_file=$(mktemp)
+            if ! gh api "repos/${{ github.repository }}/actions/runs/$run_id/artifacts" \
+                --jq '.artifacts[] | select(.name | startswith("smoke-results-schema-vally-")) | .name' \
+                > "$artifacts_file"; then
+              echo "::error::gh api failed listing artifacts for vally run $run_id (auth/rate-limit/transient). Aborting."
+              rm -f "$artifacts_file"
+              exit 1
+            fi
+            artifacts_json=$(cat "$artifacts_file")
+            rm -f "$artifacts_file"
+            if [ -z "$artifacts_json" ]; then
+              echo "  Vally run $run_id: no smoke-results-schema-vally-* artifact (likely failed before summarise)."
+              continue
+            fi
+            echo "  Vally run $run_id: downloading vally schema artifact..."
+            gh run download "$run_id" \
+              --pattern 'smoke-results-schema-vally-*' \
+              --dir "artifacts-in/run-$run_id"
+          done < vally-run-ids.txt
+
+          echo
+          echo "Downloaded vally artifacts:"
+          find artifacts-in -name 'deepLinks.json' -printf '  %p\n' | head -n 30 || true
+          total_vally=$(find artifacts-in -name 'deepLinks.json' | wc -l)
+          echo "Total deepLinks.json files (vally producer): $total_vally"
+
+      # ------------------------------------------------------------------
+      # Discover recent full-eval workflow runs and download their result
+      # artifacts. Full-evals run nightly (sparser than smoke) with 90-day
+      # retention, so we use a wider window (default 60 days) to avoid
+      # near-empty trends. Mirrors the smoke download loop above; safe to
+      # no-op when the producer hasn't run yet (empty `run-ids.txt`).
+      # ------------------------------------------------------------------
+      - name: Download recent full-eval artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FE_WINDOW_DAYS: ${{ github.event.inputs.fulleval-window-days || '60' }}
+        run: |
+          set -euo pipefail
+          window_days="${FE_WINDOW_DAYS:-60}"
+          # Fetch 1.5x window for full-eval (vs 2x for smoke) because retention
+          # is already capped at 90 days; deeper than ~90 days is wasted calls.
+          fetch_horizon=$(( window_days * 3 / 2 ))
+          mkdir -p fulleval-in
+          echo "Listing full-eval workflow runs (limit 100, last $fetch_horizon days)..."
+          cutoff=$(date -u -d "-$fetch_horizon days" '+%Y-%m-%dT%H:%M:%SZ')
+          default_branch=$(gh api "repos/${{ github.repository }}" --jq '.default_branch')
+          # Same trade-offs as the smoke loop: do NOT swallow gh failures with
+          # `|| true` (an auth/rate-limit error would silently produce an
+          # empty full-eval tab); list returns 0 lines when no runs exist.
+          gh run list \
+            --workflow fabric-full-eval-ephemeral.yml \
+            --branch "$default_branch" \
+            --limit 100 \
+            --json databaseId,createdAt,conclusion \
+            --jq "[.[] | select(.createdAt > \"$cutoff\") | .databaseId] | unique | join(\"\n\")" \
+            > fe-run-ids.txt
+
+          if [ ! -s fe-run-ids.txt ]; then
+            echo "No full-eval runs found on $default_branch in the last $fetch_horizon days. Full-eval tab will show an empty-state message."
+            exit 0
+          fi
+
+          echo "Found $(wc -l < fe-run-ids.txt) recent full-eval run(s) on $default_branch. Downloading artifacts..."
+          while IFS= read -r run_id; do
+            [ -z "$run_id" ] && continue
+            artifacts_file=$(mktemp)
+            # `gh api --paginate` follows the Link headers so we don't miss
+            # artifacts when a single run uploads >30 (the default page
+            # size). Without --paginate, a later refactor that splits
+            # artifacts across pages would silently drop telemetry files.
+            # NOTE: the smoke loop above does not currently paginate; if
+            # smoke ever uploads >30 artifacts per run, the same fix
+            # should be applied there in a separate PR.
+            if ! gh api --paginate "repos/${{ github.repository }}/actions/runs/$run_id/artifacts" \
+                --jq '.artifacts[] | select(.name | startswith("full-eval-results-")) | .name' \
+                > "$artifacts_file"; then
+              echo "::error::gh api failed listing full-eval artifacts for run $run_id (auth/rate-limit/transient). Aborting."
+              rm -f "$artifacts_file"
+              exit 1
+            fi
+            artifacts_json=$(cat "$artifacts_file")
+            rm -f "$artifacts_file"
+            if [ -z "$artifacts_json" ]; then
+              echo "  Run $run_id: no full-eval-results-* artifact (likely failed before upload)."
+              continue
+            fi
+            echo "  Run $run_id: downloading full-eval artifact..."
+            gh run download "$run_id" \
+              --pattern 'full-eval-results-*' \
+              --dir "fulleval-in/run-$run_id"
+          done < fe-run-ids.txt
+
+          echo
+          echo "Downloaded full-eval artifacts:"
+          find fulleval-in -name 'eval-run-telemetry.json' -printf '  %p\n' | head -n 30 || true
+          total_fe=$(find fulleval-in -name 'eval-run-telemetry.json' | wc -l)
+          echo "Total eval-run-telemetry.json files: $total_fe"
+          # Surface zero-telemetry-after-download as a warning: the producer
+          # ran in the window but no usable artifacts came back. This is
+          # different from "producer never ran" (handled above by the empty
+          # fe-run-ids.txt exit). Distinguish the two so a regression in
+          # artifact upload doesn't silently hide the tab without signal.
+          if [ "$total_fe" -eq 0 ] && [ -s fe-run-ids.txt ]; then
+            echo "::warning::Found $(wc -l < fe-run-ids.txt) full-eval run(s) on $default_branch but downloaded 0 telemetry files. Producer may have a regression in artifact upload. Dashboard will fall back to single-tab smoke-only."
+          fi
+
+      - name: Run aggregator -> static HTML
+        env:
+          WINDOW_DAYS: ${{ github.event.inputs.window-days || '30' }}
+          FE_WINDOW_DAYS: ${{ github.event.inputs.fulleval-window-days || '60' }}
+        run: |
+          set -euo pipefail
+          mkdir -p dashboard-out
+          # Pass --fulleval-input-root only when at least one full-eval
+          # artifact actually downloaded. When fulleval-in/ is empty (e.g.
+          # producer hasn't run yet on a fresh deploy), omit the flag so the
+          # dashboard falls back to the single-tab smoke-only page rather
+          # than rendering a tabbed UI with a "no data" full-eval tab.
+          # NOTE: when at least one run was listed but no telemetry came
+          # back, the previous step emits a ::warning:: so the producer
+          # regression is surfaced in the Actions summary rather than
+          # being silently hidden behind a single-tab page.
+          fe_args=()
+          if find fulleval-in -name 'eval-run-telemetry.json' 2>/dev/null | grep -q .; then
+            fe_args=(--fulleval-input-root ./fulleval-in --fulleval-window-days "${FE_WINDOW_DAYS:-60}")
+          else
+            echo "No full-eval telemetry found - rendering single-tab smoke-only dashboard."
+          fi
+          python ./.github/scripts/build-dashboard.py \
+            --input-root ./artifacts-in \
+            --output-dir ./dashboard-out \
+            --repo "${{ github.repository }}" \
+            --window-days "${WINDOW_DAYS:-30}" \
+            "${fe_args[@]}"
+          echo "Generated $(wc -c < dashboard-out/index.html) bytes of HTML."
+
+      - name: Append rollup to workflow summary
+        env:
+          WINDOW_DAYS: ${{ github.event.inputs.window-days || '30' }}
+        run: |
+          set -euo pipefail
+          # Emit a short summary into the workflow's job summary page so the
+          # artifact + the Pages URL (surfaced by the deploy job's environment
+          # link in the run UI) are easy to find.
+          {
+            echo "## Smoke dashboard built"
+            echo
+            echo "**Live dashboard (stable URL):** see the **github-pages** environment link on this run's page (top-right \"Deployments\" section), or the deploy job below."
+            echo
+            echo "Static HTML also uploaded as the **smoke-dashboard-html** artifact below as an offline fallback. Download via:"
+            echo
+            echo '```bash'
+            echo "gh run download ${{ github.run_id }} --name smoke-dashboard-html"
+            echo '```'
+            echo
+            echo "Window: ${WINDOW_DAYS:-30} days. Source: \`.github/scripts/build-dashboard.py\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload dashboard artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-dashboard-html
+          path: dashboard-out/
+          if-no-files-found: warn
+          retention-days: 90
+
+      # ------------------------------------------------------------------
+      # GitHub Pages deploy. Stable URL surfaced as the `github-pages`
+      # environment URL on the workflow run page (auto-rendered by GitHub
+      # from the deploy job's `environment.url` below).
+      #
+      # Requires (one-time, by repo admin):
+      #   Settings -> Pages -> Source = "GitHub Actions"
+      # The deploy step below auto-creates the github-pages environment
+      # on first run.
+      # ------------------------------------------------------------------
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: dashboard-out/
+
+  deploy:
+    name: Deploy dashboard to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    # Default-branch guard: workflow_dispatch can run this workflow from a
+    # feature branch, but the deploy job must never publish a feature
+    # branch's HTML to the stable Pages URL (it would overwrite the latest
+    # main aggregation). The build job still runs on any branch (useful for
+    # PR-time previews via artifact download), but only main deploys.
+    if: >-
+      github.repository == 'gim-home/skills-for-fabric'
+      && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    # OIDC token and `pages: write` are only needed by `actions/deploy-pages`,
+    # so we scope them to this job rather than granting at the workflow level.
+    # Reduces blast radius of these elevated permissions.
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+      - name: Surface Pages URL in deploy job summary
+        run: |
+          set -euo pipefail
+          {
+            echo "## Dashboard deployed"
+            echo
+            echo "**Stable URL:** ${{ steps.deployment.outputs.page_url }}"
+            echo
+            echo "Bookmark this URL; it always points at the latest aggregation."
+          } >> "$GITHUB_STEP_SUMMARY"

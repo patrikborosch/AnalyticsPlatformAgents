@@ -1,0 +1,103 @@
+# Vally eval config -- migrated from tests/tests.json (skills-for-fabric)
+# Source stimulus: powerbi-report-management-publish-local-pbip
+# Pattern reference: microsoft/GitHub-Copilot-for-Azure#2235
+#
+# Layer 0 baseline coverage authored by the cutover PR; workload-team owner
+# should evolve toward Layer 1 (tool-calls) + Layer 2 (program verifier)
+# using the eventhouse-authoring-cli pilot in PR #282 as the worked example.
+# See tests/evals/README.md for the L0 template + L1+L2 walkthrough.
+
+name: powerbi-report-management-integration-eval
+description: |
+  Integration evaluation for powerbi-report-management. Migrated from
+  tests/tests.json::powerbi-report-management-publish-local-pbip as Layer 0 only; the
+  workload-team owner should add Layer 1+2 deterministic graders
+  in a follow-up PR.
+
+tags:
+  type: integration
+  skill: powerbi-report-management
+
+environment:
+  skills:
+    - ../../../skills/powerbi-report-management
+  mcpServers:
+    powerbi-modeling-mcp:
+      type: stdio
+      command: npx
+      args:
+        - "-y"
+        - "@microsoft/powerbi-modeling-mcp@latest"
+        - "--start"
+      timeout: 2m
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- powerbi-report-management-publish-local-pbip --
+  # Source: tests/tests.json (area=powerbi)
+  # TODO(<team>): calibrate constraints over first 1-2 weeks; pilot defaults inherited from eventhouse-authoring-cli
+  - name: "Publish local PBIP report to Fabric workspace"
+    prompt: |
+      I have a local SalesDashboard.pbip and want to publish the report to the {{WORKSPACE}} workspace. Walk through the decision points for binding or publishing the semantic model before creating or updating the Fabric report item.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: powerbi
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - powerbi-report-planning
+        - powerbi-report-design
+        - powerbi-report-authoring
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - powerbi-report-management
+          disallowed:
+            - powerbi-report-planning
+            - powerbi-report-design
+            - powerbi-report-authoring
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          pattern: "(?i)\\b(workspace|publish|semantic model)\\b"
+      # expectedResults parity with smoke
+      - type: output-contains
+        config:
+          substring: "workspace"
+      - type: output-contains
+        config:
+          substring: "semantic model"
+      - type: output-contains
+        config:
+          substring: "report"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50

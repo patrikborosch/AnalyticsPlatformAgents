@@ -1,0 +1,726 @@
+# Vally eval config -- migrated from tests/tests.json (skills-for-fabric)
+# Source stimuli: spark-authoring-notebook-sanity, spark-authoring-notebook-code-lakehouse, spark-authoring-notebook-code-notebookutils, spark-authoring-notebook-code-configure, spark-authoring-notebook-code-sql-crosslh, spark-authoring-notebook-code-resource-files, spark-authoring-notebook-code-runtime-context, spark-authoring-notebook-code-connection, spark-authoring-notebook-code-dag, spark-authoring-mlv-create, spark-authoring-mlv-incremental-refresh
+#
+# Known gap: prompts contain {{WORKSPACE}} placeholder substituted at runtime by
+# tests/run-vally-eval.ps1. See tests/evals/README.md for local-run instructions.
+
+name: spark-authoring-cli-integration-eval
+description: |
+  Integration evaluation for spark-authoring-cli -- verifies notebook execution sanity plus 8 notebook-code generation prompts (lakehouse IO, notebookutils, %%configure, %%sql cross-lakehouse, builtin resource files, runtime context, connections, multi-notebook DAG) and 2 Materialized Lake View prompts (CREATE MLV, incremental refresh readiness).
+
+tags:
+  type: integration
+  skill: spark-authoring-cli
+
+environment:
+  skills:
+    - ../../../skills/spark-authoring-cli
+  files:
+    - src: ../_graders
+      dest: tests/evals/_graders
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- spark-authoring-notebook-sanity --
+  # Source: tests/tests.json (area=spark)
+  # Flaky -- see https://github.com/gim-home/skills-for-fabric/issues/131
+  - name: "Run sanity notebook and report status"
+    prompt: |
+      Run the notebook named 'sparkauthoring_notebook_check' in the {{WORKSPACE}} workspace and wait for it to complete. Report the execution status. Only use the specified workspace. If not found, report an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: spark
+      flaky: "true"
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - spark-consumption-cli
+        - spark-operations-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - spark-authoring-cli
+          disallowed:
+            - spark-consumption-cli
+            - spark-operations-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "sparkauthoring_notebook_check"
+      - type: output-contains
+        config:
+          substring: "Completed"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- spark-authoring-notebook-code-lakehouse --
+  # Source: tests/tests.json (area=spark)
+  # Flaky -- see https://github.com/gim-home/skills-for-fabric/issues/129
+  - name: "Codegen -- read parquet from default lakehouse Files"
+    prompt: |
+      Write PySpark code for a Fabric notebook cell that reads a parquet file from the default lakehouse Files folder and displays the first 10 rows.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: spark
+      flaky: "true"
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - spark-consumption-cli
+        - spark-operations-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - spark-authoring-cli
+          disallowed:
+            - spark-consumption-cli
+            - spark-operations-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "spark.read"
+      - type: output-contains
+        config:
+          substring: "Files/"
+      - type: output-contains
+        config:
+          substring: "show"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- spark-authoring-notebook-code-notebookutils --
+  # Source: tests/tests.json (area=spark)
+  - name: "Codegen -- mount ADLS Gen2 via notebookutils"
+    prompt: |
+      Write notebook code to mount an ADLS Gen2 storage account to a Fabric Spark notebook using notebookutils.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: spark
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - spark-consumption-cli
+        - spark-operations-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - spark-authoring-cli
+          disallowed:
+            - spark-consumption-cli
+            - spark-operations-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "notebookutils"
+      - type: output-contains
+        config:
+          substring: "mount"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- spark-authoring-notebook-code-configure --
+  # Source: tests/tests.json (area=spark)
+  - name: "Codegen -- %%configure session memory + native execution"
+    prompt: |
+      How do I configure a Fabric Spark notebook session with more memory and enable native execution using %%configure?
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: spark
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - spark-consumption-cli
+        - spark-operations-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - spark-authoring-cli
+          disallowed:
+            - spark-consumption-cli
+            - spark-operations-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "%%configure"
+      - type: output-contains
+        config:
+          substring: "driverMemory"
+      - type: output-contains
+        config:
+          substring: "executorMemory"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- spark-authoring-notebook-code-sql-crosslh --
+  # Source: tests/tests.json (area=spark)
+  # Flaky -- see https://github.com/gim-home/skills-for-fabric/issues/130
+  - name: "Codegen -- %%sql cross-lakehouse query"
+    prompt: |
+      Write a %%sql cell to query the 'orders' table in schema 'dbo' from lakehouse 'SalesLH' in workspace 'DataTeam'
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: spark
+      flaky: "true"
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - spark-consumption-cli
+        - spark-operations-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - spark-authoring-cli
+          disallowed:
+            - spark-consumption-cli
+            - spark-operations-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "%%sql"
+      - type: output-contains
+        config:
+          substring: "DataTeam"
+      - type: output-contains
+        config:
+          substring: "SalesLH"
+      - type: output-contains
+        config:
+          substring: "dbo"
+      - type: output-contains
+        config:
+          substring: "orders"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- spark-authoring-notebook-code-resource-files --
+  # Source: tests/tests.json (area=spark)
+  # Flaky -- see https://github.com/gim-home/skills-for-fabric/issues/129
+  - name: "Codegen -- read builtin resource file via nbResPath"
+    prompt: |
+      Write notebook code to read a config JSON file from the notebook's builtin resource folder using Spark
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: spark
+      flaky: "true"
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - spark-consumption-cli
+        - spark-operations-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - spark-authoring-cli
+          disallowed:
+            - spark-consumption-cli
+            - spark-operations-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "notebookutils.nbResPath"
+      - type: output-contains
+        config:
+          substring: "file:"
+      - type: output-contains
+        config:
+          substring: "builtin"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- spark-authoring-notebook-code-runtime-context --
+  # Source: tests/tests.json (area=spark)
+  # Flaky -- see https://github.com/gim-home/skills-for-fabric/issues/129
+  - name: "Codegen -- detect pipeline runtime context"
+    prompt: |
+      Write notebook code to check if the notebook is running in a pipeline and log the workspace ID
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: spark
+      flaky: "true"
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - spark-consumption-cli
+        - spark-operations-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - spark-authoring-cli
+          disallowed:
+            - spark-consumption-cli
+            - spark-operations-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "notebookutils.runtime.context"
+      - type: output-contains
+        config:
+          substring: "isForPipeline"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- spark-authoring-notebook-code-connection --
+  # Source: tests/tests.json (area=spark)
+  # Flaky -- see https://github.com/gim-home/skills-for-fabric/issues/129
+  - name: "Codegen -- PostgreSQL via Fabric connections"
+    prompt: |
+      Write notebook code to connect to a PostgreSQL database using Fabric connections
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: spark
+      flaky: "true"
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - spark-consumption-cli
+        - spark-operations-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - spark-authoring-cli
+          disallowed:
+            - spark-consumption-cli
+            - spark-operations-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "notebookutils.connections"
+      - type: output-contains
+        config:
+          substring: "getCredential"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- spark-authoring-notebook-code-dag --
+  # Source: tests/tests.json (area=spark)
+  - name: "Codegen -- notebook DAG via runMultiple"
+    prompt: |
+      Write notebook code to run 3 notebooks in parallel then a 4th that depends on all three completing
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: spark
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - spark-consumption-cli
+        - spark-operations-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - spark-authoring-cli
+          disallowed:
+            - spark-consumption-cli
+            - spark-operations-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "notebookutils.notebook.runMultiple"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- spark-authoring-mlv-create --
+  # New: covers "materialized lake view", "MLV", "CREATE MATERIALIZED LAKE VIEW" triggers
+  # Author: sairamyeturi
+  # NOTE: Execution-mode prompt — agent must actually create the MLV in {{WORKSPACE}}.
+  # Uses the `nyctlc` table seeded by setup_test_env.py in the default dbo schema.
+  - name: "MLV -- create a Materialized Lake View with Spark SQL"
+    prompt: |
+      In the {{WORKSPACE}} workspace, create a materialized lake view named
+      dbo.nyc_trips_clean in my Fabric lakehouse. The MLV should read from
+      the existing dbo.nyctlc table, select VendorID, lpep_pickup_datetime,
+      fare_amount, and total_amount, and add a data quality constraint that
+      drops rows where fare_amount is null or not positive. Use CREATE OR
+      REPLACE so the script is safe to re-run. Only use the specified
+      workspace. If not found, report an error. Do NOT search or use any
+      other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: spark
+    constraints:
+      max_turns: 15
+      max_tokens: 150000
+      max_duration: 5m
+      reject_skills:
+        - spark-consumption-cli
+        - spark-operations-cli
+    graders:
+      # ----------------------------------------------------------------
+      # Layer 0 -- baseline narrative / metric checks
+      # ----------------------------------------------------------------
+      - type: skill-invocation
+        config:
+          required:
+            - spark-authoring-cli
+          disallowed:
+            - spark-consumption-cli
+            - spark-operations-cli
+      - type: completed
+
+      # ----------------------------------------------------------------
+      # Layer 1 -- tool-calls assertions. Grounded in real trajectory
+      # from live Fabric workspace MLV_At_Scale (2026-06-16).
+      # Proves the agent ATTEMPTED the right Fabric REST + Livy operations.
+      # ----------------------------------------------------------------
+      - type: tool-calls
+        name: tool-calls-mlv-create
+        config:
+          required:
+            # Workspace discovery via Fabric REST
+            - name: &shell_tool '(?i)^(bash|powershell|shell|run_in_terminal|functions\.bash|functions\.powershell)$'
+              command: '(?is)\baz\s+rest\b(?:.*?--method\s+get\b.*?/v1/workspaces\b|.*?/v1/workspaces\b.*?--method\s+get\b)'
+            # Lakehouse discovery
+            - name: *shell_tool
+              command: '(?is)\baz\s+rest\b(?:.*?--method\s+get\b.*?/lakehouses\b|.*?/lakehouses\b.*?--method\s+get\b)'
+            # Livy session creation (POST to livyApi sessions endpoint)
+            - name: *shell_tool
+              command: '(?is)\baz\s+rest\b(?:.*?--method\s+post\b.*?/livyApi/.*?/sessions\b|.*?/livyApi/.*?/sessions\b.*?--method\s+post\b)'
+            # Spark SQL statement submission (POST to statements endpoint)
+            - name: *shell_tool
+              command: '(?is)\baz\s+rest\b(?:.*?--method\s+post\b.*?/statements\b|.*?/statements\b.*?--method\s+post\b)'
+          disallowed:
+            # Must not DELETE or PUT on workspace/lakehouse items
+            - name: *shell_tool
+              command: '(?is)\baz\s+rest\b.*?--method\s+(delete|put)\b.*?/(workspaces|lakehouses)/[^/\s]+'
+            # Must not use Fabric /v2/ (no public v2 surface today)
+            - name: *shell_tool
+              command: '(?is)https://api\.fabric\.microsoft\.com/v2/'
+
+      # ----------------------------------------------------------------
+      # Layer 2 -- live-Fabric program verifier. Creates a Livy session
+      # and runs SHOW MATERIALIZED LAKE VIEWS + SHOW CREATE to assert the
+      # MLV exists with the correct CONSTRAINT/CHECK/ON MISMATCH shape.
+      # ----------------------------------------------------------------
+      - type: program
+        name: verify-mlv-create
+        config:
+          program: pwsh
+          args:
+            - -NoProfile
+            - -ExecutionPolicy
+            - Bypass
+            - -File
+            - tests/evals/_graders/spark-authoring-cli/verify-mlv-create.ps1
+          timeout: 300s
+          env:
+            FABRIC_WORKSPACE_ID: "{{WORKSPACE_ID}}"
+            MLV_EXPECTED_NAME: "nyc_trips_clean"
+            MLV_EXPECTED_SCHEMA: "dbo"
+            VALLY_GRADER_POLL_DEADLINE_SECONDS: "120"
+            VALLY_GRADER_POLL_INTERVAL_SECONDS: "5"
+
+      # ----------------------------------------------------------------
+      # Layer 0 (narrative) -- output-string checks
+      # ----------------------------------------------------------------
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          pattern: "(?i)CREATE\\s+(OR\\s+REPLACE\\s+)?MATERIALIZED\\s+LAKE\\s+VIEW"
+      - type: output-contains
+        config:
+          substring: "nyc_trips_clean"
+      - type: output-matches
+        config:
+          # DOTALL + non-greedy bridge — tolerates multi-line SQL formatting
+          pattern: "(?is)CONSTRAINT\\b[\\s\\S]{0,120}?CHECK\\b"
+      - type: output-matches
+        config:
+          pattern: "(?i)ON\\s+MISMATCH\\s+(DROP|FAIL)"
+
+      # ----------------------------------------------------------------
+      # Budget kill-switches
+      # ----------------------------------------------------------------
+      - type: token-budget
+        config:
+          max: 150000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "5m"
+      - type: turn-count
+        config:
+          max: 15
+      - type: tool-call-count
+        config:
+          max: 25
+      - type: turn-count
+        config:
+          max: 10
+      - type: tool-call-count
+        config:
+          max: 15
+
+  # -- spark-authoring-mlv-incremental-refresh --
+  # New: covers "materialized lake view incremental refresh" trigger
+  # Author: sairamyeturi
+  - name: "MLV -- review query for incremental refresh readiness"
+    l1l2_exempt: "Offline incremental-refresh-readiness review: agent analyzes provided SQL text and returns advice; nothing is created in Fabric to verify (no tool call, no artefact)."
+    prompt: |
+      I have a materialized lake view in my Fabric lakehouse that uses DISTINCT and a window function ROW_NUMBER(). Review whether this materialized lake view query supports incremental refresh and suggest how to rewrite it for optimal refresh.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: spark
+    constraints:
+      max_turns: 10
+      max_tokens: 150000
+      max_duration: 3m
+      reject_skills:
+        - spark-consumption-cli
+        - spark-operations-cli
+    graders:
+      # ----------------------------------------------------------------
+      # Layer 0 -- baseline narrative / metric checks
+      # ----------------------------------------------------------------
+      - type: skill-invocation
+        config:
+          required:
+            - spark-authoring-cli
+          disallowed:
+            - spark-consumption-cli
+            - spark-operations-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          pattern: "(?i)(incremental|full|optimal)[-\\s]+refresh"
+      - type: output-matches
+        config:
+          pattern: "(?i)(window\\s+function|ROW_NUMBER|DISTINCT)"
+      - type: output-not-matches
+        config:
+          # Catches affirmatively-wrong verdicts only
+          pattern: "(?i)\\b(is|will\\s+be)\\s+(fully\\s+)?(incremental[-\\s]refresh[-\\s]safe|incrementally\\s+refreshable|incremental[-\\s]refresh[-\\s]+ready|incremental[-\\s]refresh[-\\s]+eligible)\\b"
+
+      # ----------------------------------------------------------------
+      # Budget kill-switches
+      # ----------------------------------------------------------------
+      - type: token-budget
+        config:
+          max: 150000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "3m"
+      - type: turn-count
+        config:
+          max: 10
+      - type: tool-call-count
+        config:
+          max: 25

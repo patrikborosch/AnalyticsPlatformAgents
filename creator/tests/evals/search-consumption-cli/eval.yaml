@@ -1,0 +1,77 @@
+# Vally eval config -- migrated from tests/tests.json (skills-for-fabric)
+# Source stimuli: search-consumption-find-lakehouse
+#
+# Known gap: prompts contain {{WORKSPACE}} placeholder substituted at runtime by
+# tests/run-vally-eval.ps1. See tests/evals/README.md for local-run instructions.
+
+name: search-consumption-cli-integration-eval
+description: |
+  Integration evaluation for search-consumption-cli -- verifies workspace/item discovery across the tenant via Fabric search APIs.
+
+tags:
+  type: integration
+  skill: search-consumption-cli
+
+environment:
+  skills:
+    - ../../../skills/search-consumption-cli
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- search-consumption-find-lakehouse --
+  # Source: tests/tests.json (area=search)
+  # Flaky -- see https://github.com/gim-home/skills-for-fabric/issues/135
+  - name: "Find lakehouse by name across tenant"
+    prompt: |
+      Find a lakehouse named LSEGDemo in the {{WORKSPACE}} workspace specifically. Search by workspace name first, then locate the LSEGDemo lakehouse within that workspace. Return its ID and full workspace name. Only use the specified workspace; do NOT return matches from any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: search
+      flaky: "true"
+    # Per-stimulus constraints (in-flight kill-switch).
+    # Recalibrated 2026-05-28 from CI run 26585421573: cross-tenant lakehouse search
+    # legitimately needs ~200k tokens for the multi-workspace traversal.
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - search-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "LSEGDemo"
+      - type: output-contains
+        config:
+          substring: "{{WORKSPACE}}"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50

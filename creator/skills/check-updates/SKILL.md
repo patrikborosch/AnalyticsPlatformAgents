@@ -45,18 +45,29 @@ Before checking, read `~/.config/fabric-collection/last-update-check.json`:
 
 ### Step 1: Get Local Version
 
-Read the `version` field from the local `package.json` file in the skills-for-fabric installation directory.
+Read the `version` field from the local plugin manifest. Two install layouts exist:
+
+- **GitHub Copilot CLI plugin install** (`~/.copilot/installed-plugins/fabric-collection/fabric-skills/`): the manifest is `.github/plugin/plugin.json` — there is no `package.json` here.
+- **Manual git clone**: the manifest is `package.json` at the repo root.
+
+Read whichever is present. Both files contain a top-level `"version": "<semver>"` field.
 
 ### Step 2: Determine Repository Owner and Name
 
-Read the `repository` field from the local `plugin.json` (or `package.json`) to extract the GitHub owner and repo name. Parse the URL to get `owner` and `repo`:
+Read the `repository` field from the same manifest you used in Step 1, and parse the URL to get `owner` and `repo`. The two layouts store the field differently:
 
-```text
-plugin.json → "repository": "https://github.com/<owner>/<repo>"
-package.json → "repository.url": "https://github.com/<owner>/<repo>.git"
-```
+- **Copilot CLI plugin install** (`.github/plugin/plugin.json`) — plain URL string:
+  ```text
+  "repository": "https://github.com/<owner>/<repo>"
+  ```
+- **Manual git clone** (`package.json` at the repo root) — object whose `url` ends with `.git`:
+  ```text
+  "repository": { "type": "git", "url": "https://github.com/<owner>/<repo>.git" }
+  ```
 
-> **CRITICAL**: Use the owner string **exactly as it appears** in the URL. Do NOT alter, normalize, or "correct" the owner name (e.g., do NOT replace underscores with hyphens). The owner `bocrivat_microsoft` uses an **underscore** — this is intentional and correct.
+There is no bare `plugin.json` at the repo root in either layout, and there is no top-level `package.json` in the Copilot CLI plugin install — always use the path that matches your actual layout.
+
+> **CRITICAL**: Use the owner string **exactly as it appears** in the URL. Do NOT alter, normalize, or "correct" the owner name — including underscores, mixed case, or any other punctuation. Whatever the manifest's `repository` URL says, that is the correct owner. (LLMs sometimes "auto-correct" underscores to hyphens — don't.)
 
 ### Step 3: Fetch Latest Release
 
@@ -64,9 +75,11 @@ Use the available tools in your environment to get the latest version. **Try met
 
 > **IMPORTANT**: Methods A and B work with both public and private repositories. Method C only works with public repos. Always attempt A or B first.
 
-**Method A — Git CLI (preferred)**
+**Method A — Git CLI (preferred for git-clone installs)**
 
-If the skills-for-fabric directory is a Git clone, fetch the remote `package.json` without pulling:
+Only available if the skills-for-fabric directory is a Git working tree (i.e. it has a `.git` entry — either a directory in a normal clone, or a file in a worktree/submodule). The Copilot CLI plugin install at `~/.copilot/installed-plugins/fabric-collection/fabric-skills/` has no `.git` entry — for that install layout, skip to Method B. If you want a tool-agnostic check, run `git rev-parse --is-inside-work-tree` and only proceed if it prints `true`.
+
+If you do have a Git clone, fetch the remote `package.json` without pulling:
 
 ```bash
 git fetch origin main --quiet
@@ -81,11 +94,6 @@ If you have access to GitHub MCP server tools (e.g., `get_file_contents`), use t
 
 ```text
 get_file_contents(owner: "<owner>", repo: "<repo>", path: "package.json")
-```
-
-For this repository, the correct call is:
-```text
-get_file_contents(owner: "bocrivat_microsoft", repo: "skills-for-fabric", path: "package.json")
 ```
 
 Extract the `version` field from the response. This method works with private repositories because MCP tools use authenticated GitHub access.
@@ -136,16 +144,28 @@ Show detailed information:
 
 ## Update Commands
 
-Choose the update method based on how you installed skills-for-fabric:
+Choose the update method based on how you installed skills-for-fabric.
 
-### GitHub Copilot CLI
+### GitHub Copilot CLI (recommended)
 /plugin update fabric-skills@fabric-collection
+
+If you originally installed the plugin under the legacy id, this also works:
+  /plugin update skills-for-fabric@fabric-collection
+
+The plugin was renamed in 0.3.0 (skills-for-fabric → fabric-skills),
+but the legacy id is kept as a deprecated alias of fabric-skills, so
+either /plugin update command pulls the canonical payload.
+
+(Optional cleanup) To migrate your installed entry from the legacy id
+to the canonical fabric-skills id:
+  /plugin uninstall skills-for-fabric@fabric-collection
+  /plugin install fabric-skills@fabric-collection
 
 ### Manual (Git clone)
 cd /path/to/skills-for-fabric
 git pull
-./install.ps1   # Windows
-./install.sh    # macOS/Linux
+
+(There are no installation scripts to re-run on 0.3.0+.)
 
 ─────────────────────────────────────────────────────────────────
 Would you like to update now? (The current skill will still work)

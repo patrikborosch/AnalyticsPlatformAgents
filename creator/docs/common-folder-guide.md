@@ -30,11 +30,51 @@ common/
 ├── COMMON-CLI.md               # az rest, curl, jq recipes
 ├── EVENTHOUSE-AUTHORING-CORE.md       # KQL management commands, table/policy/function authoring
 ├── EVENTHOUSE-CONSUMPTION-CORE.md     # KQL query patterns, time-series, performance best practices
+├── ITEM-DEFINITIONS-CORE.md    # Item definition formats and APIs
+├── SPARK-NOTEBOOK-AUTHORING-CORE.md  # Notebook authoring hub → delegates to module folder
 ├── SPARK-AUTHORING-CORE.md     # Spark job development, notebooks, CI/CD
 ├── SPARK-CONSUMPTION-CORE.md   # Livy sessions, interactive Spark
 ├── SQLDW-AUTHORING-CORE.md     # T-SQL DDL/DML, COPY INTO, transactions
-└── SQLDW-CONSUMPTION-CORE.md   # SELECT patterns, DMVs, Query Insights
+├── SQLDW-CONSUMPTION-CORE.md   # SELECT patterns, DMVs, Query Insights
+└── notebook-authoring/          # Module folder (see below)
+    ├── connections.md
+    ├── context-and-params.md
+    ├── context-resolution.md
+    ├── lakehouse-paths.md
+    ├── lakehouse-tables.md
+    ├── library-mgmt.md
+    ├── ml-workflow.md
+    ├── notebook-resources.md
+    └── troubleshooting.md
 ```
+
+## Flat CORE Files vs Module Folders
+
+Most common content lives in a single flat `{ENDPOINT}-{ROLE}-CORE.md` file. When a topic grows large enough that a single file would exceed **~10K tokens** or covers many distinct sub-topics, split it into a **module folder** instead.
+
+### When to Use a Flat CORE File
+
+- The content fits comfortably in one document (< 10K tokens).
+- The topic has a small number of closely related sections.
+- Example: `SQLDW-AUTHORING-CORE.md` — T-SQL DDL, DML, and ingestion patterns in one file.
+
+### When to Create a Module Folder
+
+- The content would exceed ~10K tokens as a single file.
+- The topic naturally decomposes into independent sub-topics that skills may read selectively.
+- Multiple skills need different subsets of the material.
+- Example: `notebook-authoring/` — nine focused modules (paths, tables, connections, troubleshooting, etc.) that individual skills can reference independently.
+
+### Module Folder Conventions
+
+1. **Keep a hub CORE file.** Create `{ENDPOINT}-{ROLE}-CORE.md` at the `common/` root as a lightweight entry point. It should contain:
+   - A brief overview of the topic.
+   - A **Module Index** table linking to each file in the subfolder with a "When to Read" description.
+   - Any short, universally-needed guidance (e.g., supported languages, magic commands).
+2. **Name the subfolder** using the same `{endpoint}-{role}` slug in lowercase (e.g., `notebook-authoring/`).
+3. **One module = one sub-topic.** Each file should be self-contained and independently readable.
+4. **Skills reference modules selectively.** A skill's Prerequisite Knowledge section can link to individual module files rather than the entire folder.
+5. **Reference paths from skills** use `../../common/{subfolder}/{module}.md`.
 
 ## CORE vs CLI Pattern
 
@@ -138,12 +178,13 @@ This skill adds: **how to invoke** all authoring scenarios from CLI.
 |----------------------|-----------|
 | Fabric-wide, applies to all skills | Add to `COMMON-CORE.md` |
 | CLI patterns for all endpoints | Add to `COMMON-CLI.md` |
-| Specific to one endpoint | `{ENDPOINT}-{AUTHORING|CONSUMPTION}-CORE.md` |
+| Specific to one endpoint, fits in one file (< 10K tokens) | `{ENDPOINT}-{ROLE}-CORE.md` |
+| Specific to one endpoint, too large for one file or has many independent sub-topics | Hub `{ENDPOINT}-{ROLE}-CORE.md` + module folder `{endpoint}-{role}/` |
 
 ### Follow the Structure
 
 ```markdown
-# {ENDPOINT}-{AUTHORING|CONSUMPTION}-CORE.md
+# {ENDPOINT}-{AUTHORING|CONSUMPTION|MONITORING}-CORE.md
 
 > **Purpose**: Brief description of what this document covers.
 

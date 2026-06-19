@@ -1,0 +1,235 @@
+schemaVersion: 3
+description: Repository ownership buckets for checked-in skills + per-team contact info.
+
+# schemaVersion history:
+#   1 - teams + skills (owningTeam + area only)
+#   2 - adds optional 'contact: {name, email, github}' per team. When schemaVersion
+#       is >= 2, every team that owns at least one skill MUST have contact info.
+#   3 - adds two optional fields for partitioned ownership within a single team:
+#         - 'areas: list[string]' on a contact entry, describing which per-skill
+#           sub-areas that contact specifically owns (purely documentation).
+#         - 'additionalContacts: list[dict]' on a team, listing co-owners with
+#           the same fields as 'contact' (name + email required, github + areas
+#           optional). The primary 'contact' remains the routing default; the
+#           additional contacts are documentation for partitioned responsibility.
+#       Consumed by .github/scripts/weekly-flake-report.py to route per-test
+#       findings to the correct owner. Validated by tests/skill_ownership_manifest.py.
+
+teams:
+  platform:
+    displayName: Platform / repo maintainers
+    scope: Shared repo workflow, utility skills, contributor tooling
+    contact:
+      name: Fabric Skills Owners
+      email: FabSkillsOwners@microsoft.com
+      github: mschaumberg_microsoft
+  databricks-migration:
+    displayName: Databricks migration
+    scope: Databricks-to-Fabric migration skill and playbook
+    # Primary contact owns the migration playbook + the default routing
+    # surface; RuntimeExpDG is the additional contact for the
+    # dbutils-to-notebookutils sub-area.
+    contact:
+      name: Santhosh Kumar Ravindran
+      email: Santhosh.Ravindran@microsoft.com
+      github: saravi_microsoft
+      areas:
+        - migration-playbook
+        - default
+    additionalContacts:
+      - name: Runtime Experience DG
+        email: runtimeexpdg@microsoft.com
+        # github intentionally omitted: DGs / DLs do not map to a GitHub
+        # handle. Downstream tooling must treat missing-key as "no handle",
+        # not as empty-string. The validator rejects an explicit github: ""
+        # to keep this contract unambiguous.
+        areas:
+          - dbutils-to-notebookutils
+  synapse-migration:
+    displayName: Synapse migration
+    scope: Synapse-to-Fabric migration skill and playbook
+    contact:
+      name: Jenny Jiang
+      email: jejiang@microsoft.com
+      github: jejiang_microsoft
+  hdinsight-migration:
+    displayName: HDInsight migration
+    scope: HDInsight-to-Fabric migration skill and playbook
+    contact:
+      name: Jenny Jiang
+      email: jejiang@microsoft.com
+      github: jejiang_microsoft
+  data-engineering:
+    displayName: Data engineering
+    scope: Spark-oriented skills and end-to-end data engineering patterns
+    # Primary contact owns lakehouse path resolution, Livy session, Spark
+    # runtime + the default routing surface; RuntimeExpDG is the
+    # additional contact for the notebook-authoring sub-area.
+    contact:
+      name: Santhosh Kumar Ravindran
+      email: Santhosh.Ravindran@microsoft.com
+      github: saravi_microsoft
+      areas:
+        - lakehouse-path-resolution
+        - livy-session
+        - spark-runtime
+        - default
+    additionalContacts:
+      - name: Runtime Experience DG
+        email: runtimeexpdg@microsoft.com
+        # github intentionally omitted: DGs / DLs do not map to a GitHub
+        # handle. Downstream tooling must treat missing-key as "no handle",
+        # not as empty-string. The validator rejects an explicit github: ""
+        # to keep this contract unambiguous.
+        areas:
+          - notebook-authoring
+  sqldw:
+    displayName: SQL Data Warehouse
+    scope: Warehouse and SQL endpoint authoring/consumption skills
+    contact:
+      name: Mariya Ali
+      email: mariyaali@microsoft.com
+      github: mariyaali_microsoft
+  dataflows:
+    displayName: Dataflows Gen2
+    scope: Dataflows Gen2 authoring/consumption skills
+    contact:
+      name: Shani Zalah
+      email: shzalah@microsoft.com
+      github: shzalah_microsoft
+  eventhouse:
+    displayName: Eventhouse / KQL
+    scope: Eventhouse and KQL authoring/consumption skills
+    contact:
+      name: Eventhouse / Kusto AI team
+      email: kusto_ai@microsoft.com
+  eventstream:
+    displayName: Eventstream / Real-Time Intelligence
+    scope: Eventstream authoring/consumption skills
+    # Routed to the team DG. The DG has no GitHub handle (DGs / DLs do
+    # not map to GitHub users), so the 'github' key is omitted -- v3
+    # schema makes it optional on primary contacts, mirroring
+    # additionalContacts.
+    contact:
+      name: Fabric Eventstream AI Feature Team
+      email: eventstreamaift@microsoft.com
+  activator:
+    displayName: Activator / Reflex
+    scope: Activator authoring/consumption skills
+    contact:
+      name: Activator / Aria London team
+      email: aria-london@microsoft.com
+  catalog:
+    displayName: OneLake Catalog
+    scope: Catalog search and item discovery skills
+    contact:
+      name: OneLake Catalog team
+      email: dhpbi@microsoft.com
+  powerbi:
+    displayName: Power BI semantic models
+    scope: Power BI authoring/consumption skills
+    contact:
+      name: Power BI Modelling Skills team
+      email: pbi-modelling-skills@microsoft.com
+  ananke:
+    displayName: Ananke / FabricIQ
+    scope: Power BI MCP-based data exploration and querying skills
+    contact:
+      name: Ananke / Nexus team
+      email: nexus-team@microsoft.com
+  powerbi-report:
+    displayName: Power BI Reports
+    scope: Power BI report planning, design, authoring, and management skills
+    contact:
+      name: Zeeshan Habib
+      email: zehabib@microsoft.com
+      github: zehabib_microsoft
+
+skills:
+  activator-authoring-cli:
+    owningTeam: activator
+    area: authoring
+  activator-consumption-cli:
+    owningTeam: activator
+    area: consumption
+  check-updates:
+    owningTeam: platform
+    area: utility
+  databricks-migration:
+    owningTeam: databricks-migration
+    area: migration
+  dataflows-authoring-cli:
+    owningTeam: dataflows
+    area: authoring
+  dataflows-consumption-cli:
+    owningTeam: dataflows
+    area: consumption
+  dataflows-save-as-authoring-cli:
+    owningTeam: dataflows
+    area: authoring
+  e2e-medallion-architecture:
+    owningTeam: data-engineering
+    area: end-to-end-patterns
+  eventhouse-authoring-cli:
+    owningTeam: eventhouse
+    area: authoring
+  eventhouse-consumption-cli:
+    owningTeam: eventhouse
+    area: consumption
+  fabriciq:
+    owningTeam: ananke
+    area: consumption
+  eventstream-authoring-cli:
+    owningTeam: eventstream
+    area: authoring
+  eventstream-consumption-cli:
+    owningTeam: eventstream
+    area: consumption
+  hdinsight-migration:
+    owningTeam: hdinsight-migration
+    area: migration
+  semantic-model-authoring:
+    owningTeam: powerbi
+    area: authoring
+  semantic-model-consumption:
+    owningTeam: powerbi
+    area: consumption
+  powerbi-report-authoring:
+    owningTeam: powerbi-report
+    area: authoring
+  powerbi-report-design:
+    owningTeam: powerbi-report
+    area: authoring
+  powerbi-report-management:
+    owningTeam: powerbi-report
+    area: authoring
+  powerbi-report-planning:
+    owningTeam: powerbi-report
+    area: authoring
+  spark-authoring-cli:
+    owningTeam: data-engineering
+    area: spark-authoring
+  spark-consumption-cli:
+    owningTeam: data-engineering
+    area: spark-consumption
+  spark-operations-cli:
+    owningTeam: data-engineering
+    area: spark-operations
+  sqldw-authoring-cli:
+    owningTeam: sqldw
+    area: authoring
+  sqldw-consumption-cli:
+    owningTeam: sqldw
+    area: consumption
+  sqldw-operations-cli:
+    owningTeam: sqldw
+    area: operations
+  search-consumption-cli:
+    owningTeam: catalog
+    area: consumption
+  synapse-migration:
+    owningTeam: synapse-migration
+    area: migration
+  pipeline-migration:
+    owningTeam: synapse-migration
+    area: migration

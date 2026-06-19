@@ -1,0 +1,26 @@
+{
+  "$comment": "Marketplace-level metadata that is NOT derived from per-plugin manifests. Edited by hand; combined with each plugin's manifest by build/build_plugins.py to produce .github/plugin/marketplace.json and .claude-plugin/marketplace.json (byte-identical).",
+  "name": "fabric-collection",
+  "metadata": {
+    "description": "Microsoft Skills for Fabric collection for GitHub Copilot CLI"
+  },
+  "owner": {
+    "name": "Microsoft",
+    "email": "copilot@microsoft.com"
+  },
+  "pluginOrder": [
+    "fabric-skills",
+    "fabric-authoring",
+    "fabric-consumption",
+    "fabric-operations",
+    "powerbi-authoring"
+  ],
+  "aliases": [
+    {
+      "$comment": "Pre-0.3.0 plugin id. Kept as a deprecated alias of fabric-skills so already-installed users can /plugin update skills-for-fabric@fabric-collection again and receive the canonical payload.",
+      "alias": "skills-for-fabric",
+      "of": "fabric-skills",
+      "descriptionPrefix": "[DEPRECATED ALIAS of fabric-skills@fabric-collection \u2014 pre-0.3.0 users only; new installs should use fabric-skills.] "
+    }
+  ]
+}

@@ -108,9 +108,6 @@ if ($Tool -eq "claude" -or $Tool -eq "all") {
     $claudeConfig = Join-Path $env:APPDATA "Claude\claude_desktop_config.json"
     # Claude uses a different format with command/args for remote servers
     # Version pinned for security and reproducibility
-    # SECURITY NOTE: npx -y auto-installs packages without confirmation.
-    # Pin the version explicitly and audit @anthropic/mcp-proxy before first use.
-    # Consider pre-installing globally (npm i -g @anthropic/mcp-proxy@0.1.0) instead.
     $mcpProxyVersion = "0.1.0"  # Update this when upgrading
     $claudeServerConfig = @{
         command = "npx"

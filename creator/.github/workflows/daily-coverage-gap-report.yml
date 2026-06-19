@@ -1,0 +1,36 @@
+name: Daily Coverage Gap Report
+
+on:
+  schedule:
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coverage-gap-report:
+    runs-on: ubuntu-latest
+    name: 📋 Daily Coverage Gap Report
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Run coverage gap report
+      run: |
+        python tests/coverage_gap_report.py
+
+    - name: Upload coverage gap report artifact
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: coverage-gap-report
+        path: coverage-gap-report.json
+        if-no-files-found: error
+        retention-days: 30

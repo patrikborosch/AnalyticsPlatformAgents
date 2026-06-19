@@ -1,0 +1,12 @@
+# CODEOWNERS for skills-for-fabric
+# These maintainers must approve all changes to the repository
+# See docs/compliance/REPO_GUARDRAILS.md for enforcement details
+
+# Default owners for everything in the repo
+* @asander_microsoft @idgoldfa_microsoft @mschaumberg_microsoft @tebercov_microsoft
+
+# Critical security and governance files require extra scrutiny
+/.github/ @asander_microsoft @idgoldfa_microsoft @mschaumberg_microsoft @tebercov_microsoft
+/docs/compliance/RAI_THREAT_MODEL.md @asander_microsoft @idgoldfa_microsoft @mschaumberg_microsoft @tebercov_microsoft
+/docs/compliance/SECURITY_BASELINE.md @asander_microsoft @idgoldfa_microsoft @mschaumberg_microsoft @tebercov_microsoft
+/SECURITY.md @asander_microsoft @idgoldfa_microsoft @mschaumberg_microsoft @tebercov_microsoft

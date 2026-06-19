@@ -1,13 +1,19 @@
 ---
 name: spark-authoring-cli
 description: >
-  Develop Microsoft Fabric Spark/data engineering workflows with intelligent routing to specialized resources.
-  Provides core workspace/lakehouse management and routes to: data engineering patterns, development workflow,
-  or infrastructure orchestration. Use when the user wants to: (1) manage Fabric workspaces and resources,
-  (2) develop notebooks and PySpark applications, (3) design data pipelines and orchestration,
-  (4) provision infrastructure as code. Triggers: "develop notebook", "data engineering", "workspace setup",
-  "pipeline design", "infrastructure provisioning", "Delta Lake patterns", "Spark development", 
-  "lakehouse configuration", "organize lakehouse tables", "create Livy session", "notebook deployment".
+  Develop Microsoft Fabric Spark/data engineering workflows and write code in Fabric Notebook cells
+  with intelligent routing to specialized resources. Provides workspace/lakehouse management, notebook
+  code authoring (PySpark, Scala, SparkR, SQL), and Materialized Lake View (MLV) authoring
+  (Spark SQL MLVs support incremental refresh; PySpark is full-refresh only). Routes to data
+  engineering patterns, development workflow, or infrastructure orchestration.
+  Triggers: "develop notebook", "data engineering", "workspace setup", "pipeline design",
+  "Delta Lake patterns", "Spark development", "lakehouse configuration",
+  "write notebook code", "notebookutils", "notebook cell", "PySpark notebook",
+  "%%sql cell", "%%configure", "fabric notebook", "run notebook", "notebook deployment",
+  "materialized lake view", "MLV", "CREATE MATERIALIZED LAKE VIEW",
+  "MLV incremental refresh", "review MLV for incremental refresh", "MLV refresh policy",
+  "schedule MLV refresh",
+  "infrastructure provisioning"
 ---
 
 > **Update Check — ONCE PER SESSION (mandatory)**
@@ -22,11 +28,13 @@ description: >
 
 # Spark Authoring — CLI Skill
 
+This skill covers two complementary areas: (1) **managing Fabric Spark artifacts via REST APIs** (workspaces, lakehouses, notebooks, jobs, pipelines) and (2) **writing code inside Fabric Notebook cells** (PySpark, Scala, SparkR, SQL with correct lakehouse access, notebookutils, and Spark configuration). For notebook code authoring fundamentals and shared modules, MUST see [SPARK-NOTEBOOK-AUTHORING-CORE.md](../../common/SPARK-NOTEBOOK-AUTHORING-CORE.md).
+
 ## Table of Contents
 
 | Task | Reference | Notes |
 |---|---|---|
-| RULES — Read these first, follow them always | [SKILL.md § RULES](#rules--read-these-first-follow-them-always) | **MUST read** — 3 rules for this skill |
+| RULES — Read these first, follow them always | [SKILL.md § RULES](#rules--read-these-first-follow-them-always) | **MUST read** — 4 rules for this skill |
 | Finding Workspaces and Items in Fabric | [COMMON-CLI.md § Finding Workspaces and Items in Fabric](../../common/COMMON-CLI.md#finding-workspaces-and-items-in-fabric) | **Mandatory** — *READ link first* [needed for finding workspace id by its name or item id by its name, item type, and workspace id] |
 | Fabric Topology & Key Concepts | [COMMON-CORE.md § Fabric Topology & Key Concepts](../../common/COMMON-CORE.md#fabric-topology--key-concepts) ||
 | Environment URLs | [COMMON-CORE.md § Environment URLs](../../common/COMMON-CORE.md#environment-urls) ||
@@ -80,6 +88,8 @@ description: >
 | Local Testing Strategy | [development-workflow.md § Local Testing Strategy](resources/development-workflow.md#local-testing-strategy) ||
 | Debugging Patterns | [development-workflow.md § Debugging Patterns](resources/development-workflow.md#debugging-patterns) ||
 | Recommended Patterns (Infrastructure) | [infrastructure-orchestration.md § Recommended patterns](resources/infrastructure-orchestration.md#recommended-patterns) ||
+| Materialized Lake View patterns | [materialized-lake-view-patterns.md § Recommended patterns](resources/materialized-lake-view-patterns.md#recommended-patterns) | Spark Lakehouse authoring guidance for MLV design (when to use MLVs, layering patterns) |
+| MLV incremental refresh patterns | [mlv-incremental-refresh-patterns.md § IR-friendly syntax guide](resources/mlv-incremental-refresh-patterns.md#ir-friendly-syntax-guide) | Use for refresh-readiness review and safe non-breaking rewrites |
 | Workspace Provisioning Principles | [infrastructure-orchestration.md § Workspace Provisioning Principles](resources/infrastructure-orchestration.md#workspace-provisioning-principles) ||
 | Lakehouse Configuration Guidance | [infrastructure-orchestration.md § Lakehouse Configuration Guidance](resources/infrastructure-orchestration.md#lakehouse-configuration-guidance) ||
 | Pipeline Design Patterns | [infrastructure-orchestration.md § Pipeline Design Patterns](resources/infrastructure-orchestration.md#pipeline-design-patterns) ||
@@ -88,7 +98,6 @@ description: >
 | Notebook Modification Workflow | [notebook-api-operations.md § Workflow](resources/notebook-api-operations.md#workflow-get--decode--modify--encode--upload--verify) | Five-step flow: retrieve, decode, modify, encode, upload |
 | Notebook API Error Reference | [notebook-api-operations.md § Error Reference](resources/notebook-api-operations.md#error-reference) | 411, 400 (updateMetadata), 401, 403 explained |
 | Notebook API Gotchas | [notebook-api-operations.md § Gotchas](resources/notebook-api-operations.md#gotchas) | `/result` suffix, empty body, `\n` per-line rule, `format=ipynb` |
-| Notebook Execution Troubleshooting | [notebook-execution-troubleshooting.md](resources/notebook-execution-troubleshooting.md) | **Critical** — Missing kernel metadata, job submission issues |
 | Default Lakehouse Binding | [notebook-api-operations.md § Default Lakehouse Binding](resources/notebook-api-operations.md#default-lakehouse-binding) | `.ipynb` metadata vs `.py` `# METADATA` block; discover IDs dynamically |
 | Public URL Data Ingestion | [notebook-api-operations.md § Public URL Data Ingestion](resources/notebook-api-operations.md#public-url-data-ingestion-spark) | Use real source URL, stage into `Files/`, then read with Spark |
 | getDefinition (read notebook content) | [notebook-api-operations.md § Step 1 — Retrieve Notebook Content](resources/notebook-api-operations.md#step-1--retrieve-notebook-content-getdefinition) | LRO flow, `?format=ipynb`, empty body (`--body '{}'`) requirement |
@@ -99,19 +108,20 @@ description: >
 | Notebook API Error Reference | [notebook-api-operations.md § Error Reference](resources/notebook-api-operations.md#error-reference) | 411, 400 (updateMetadata), 401, 403 explained |
 | Notebook API End-to-End Script | [notebook-api-operations.md § Complete End-to-End Script](resources/notebook-api-operations.md#complete-end-to-end-script) | Full bash: get → decode → modify → encode → update → verify |
 | Quick Start Examples | [SKILL.md § Quick Start Examples](#quick-start-examples) | Minimal examples for common operations |
+| **— Notebook Code Authoring (shared modules) —** | | |
+| Notebook Authoring Core | [SPARK-NOTEBOOK-AUTHORING-CORE.md](../../common/SPARK-NOTEBOOK-AUTHORING-CORE.md) | **READ FIRST for notebook code tasks** — fundamentals, code gen approach, module index |
 
 ---
 
 ## Must/Prefer/Avoid
 
 ### MUST DO
-- **Include kernel metadata in API-created notebooks** — Notebooks created via API MUST include `kernel_info` and `kernelspec` metadata fields for execution to succeed. See [notebook-execution-troubleshooting.md](resources/notebook-execution-troubleshooting.md) for required structure. Missing metadata causes immediate job failure.
 - **Check for recent jobs BEFORE creating new notebook runs** — Query job instances from last 5 minutes; if recent job exists, monitor it instead of creating duplicate
 - **Capture job instance ID immediately after POST** — Store job ID before any other operations to enable proper monitoring
 - **Verify workspace capacity assignment** before operations — Workspace must have capacity assigned and active
 - **When user provides a public data URL, follow the Public URL Data Ingestion policy** — keep detailed behavior in the linked resource section to avoid drift/duplication
 - **Format notebook cells correctly** — Each line in cell source array MUST end with `\n` to prevent code merging
-- **Use correct Livy session body format** — Send a FLAT JSON with `name`, `driverMemory`, `driverCores`, `executorMemory`, `executorCores`. Do NOT wrap in `{"payload": ...}` or send only `{"kind": "pyspark"}` — that causes HTTP 500. Use valid memory values (28g, 56g, 112g, 224g). See Create Livy Session example below and SPARK-CONSUMPTION-CORE.md.
+- **Use correct Lakehouse Livy session body format** — Send a FLAT JSON with `name`, `driverMemory`, `driverCores`, `executorMemory`, `executorCores`. Do NOT wrap in `{"payload": ...}` or send only `{"kind": "pyspark"}` — that causes HTTP 500. Use valid memory values (28g, 56g, 112g, 224g). See Create Lakehouse Livy Session example below and SPARK-CONSUMPTION-CORE.md.
 
 ### PREFER
 - **Poll job status with proper intervals** — 10-30 seconds between polls; timeout after reasonable duration (e.g., 30 minutes)
@@ -127,6 +137,7 @@ description: >
 - **Avoid immediate POST retries on failures** — Check for existing/active jobs first to prevent duplicates
 - **Don't create new runs if monitoring existing job** — One job at a time; wait for completion before submitting new runs
 - **Don't hardcode workspace/lakehouse IDs** — Discover dynamically via item listing or catalog search APIs
+- **Do NOT use Lakehouse Livy sessions to run a Fabric notebook** — Lakehouse Livy sessions (the public Livy API) are for ad-hoc interactive Spark code execution. To run a notebook as a job, use the Jobs API (`RunNotebook`) which creates a Notebook Spark session internally. See SPARK-AUTHORING-CORE.md § Notebook Execution & Job Management
 
 ---
 
@@ -141,6 +152,9 @@ description: >
 >
 > **Rule 3 — Prevent duplicate jobs and monitor execution properly.**
 > Before submitting new notebook run, ALWAYS check for recent job instances first (last 5 minutes). If recent job exists, monitor it instead of creating duplicate. After submission, capture job instance ID immediately and poll status - never retry POST. See SPARK-AUTHORING-CORE.md Job Monitoring for patterns.
+>
+> **Rule 4 — For notebook code authoring, MUST follow SPARK-NOTEBOOK-AUTHORING-CORE.md.**
+> When writing code inside notebook cells, MUST read [SPARK-NOTEBOOK-AUTHORING-CORE.md](../../common/SPARK-NOTEBOOK-AUTHORING-CORE.md) first — it defines the code generation approach, rules, and a Module Index linking to detailed guides (lakehouse paths, connections, context, orchestration, etc.). Use the Spark-specific resources in this skill ([data-engineering-patterns.md](resources/data-engineering-patterns.md), [development-workflow.md](resources/development-workflow.md)) for Spark-only implementation details. When the task is about Materialized Lake Views, read [materialized-lake-view-patterns.md](resources/materialized-lake-view-patterns.md) for authoring/design guidance and [mlv-incremental-refresh-patterns.md](resources/mlv-incremental-refresh-patterns.md) for refresh-readiness analysis.
 
 ---
 
@@ -180,9 +194,46 @@ spark.sql("CREATE SCHEMA IF NOT EXISTS silver")
 spark.sql("CREATE SCHEMA IF NOT EXISTS gold")
 ```
 
-### Create Livy Session
+### Create and Refresh a Materialized Lake View (MLV)
+```sql
+-- See resources/materialized-lake-view-patterns.md for design guidance
+-- and resources/mlv-incremental-refresh-patterns.md for refresh-readiness review.
+
+-- Bronze/Silver/Gold schemas in a Lakehouse with schemas enabled
+CREATE SCHEMA IF NOT EXISTS bronze;
+CREATE SCHEMA IF NOT EXISTS silver;
+CREATE SCHEMA IF NOT EXISTS gold;
+
+-- A simple Silver MLV with data quality constraints
+--
+-- Prerequisite for incremental refresh: enable Change Data Feed (CDF) on every
+-- source table the MLV reads from. Without CDF, optimal refresh can only choose
+-- between no refresh (sources unchanged) and full refresh — never incremental.
+-- See resources/mlv-incremental-refresh-patterns.md.
+ALTER TABLE bronze.orders_raw SET TBLPROPERTIES (delta.enableChangeDataFeed = true);
+
+CREATE OR REPLACE MATERIALIZED LAKE VIEW silver.orders_clean
+(
+    CONSTRAINT valid_order_id CHECK (order_id IS NOT NULL) ON MISMATCH DROP
+)
+AS
+SELECT
+  order_id,
+  customer_id,
+  CAST(order_ts AS TIMESTAMP) AS order_ts,
+  amount
+FROM bronze.orders_raw;
+
+-- Routine refresh is handled by the lakehouse Materialized lake views → Manage
+-- schedule/lineage view; don't orchestrate from notebooks. The SQL form below is
+-- documented only for forcing a one-time FULL recompute (troubleshooting / after
+-- a correction). There is no documented SQL form for triggering incremental refresh.
+REFRESH MATERIALIZED LAKE VIEW silver.orders_clean FULL;
+```
+
+### Create Lakehouse Livy Session
 ```bash
-# See SPARK-CONSUMPTION-CORE.md for Livy session configuration and management
+# See SPARK-CONSUMPTION-CORE.md for Lakehouse Livy session configuration and management
 # IMPORTANT: Body MUST be flat JSON with memory/cores — do NOT wrap in {"payload": ...}
 cat > /tmp/body.json << 'EOF'
 {"name": "dev-session", "driverMemory": "56g", "driverCores": 8, "executorMemory": "56g", "executorCores": 8, "conf": {"spark.dynamicAllocation.enabled": "true", "spark.fabric.pool.name": "Starter Pool"}}
@@ -192,7 +243,7 @@ az rest --method post --resource "https://api.fabric.microsoft.com" \
   --body @/tmp/body.json
 ```
 
-> **Livy Session Body — Common Mistakes**
+> **Lakehouse Livy Session Body — Common Mistakes**
 > - ❌ `{"payload": {"kind": "pyspark"}}` → HTTP 500 (wrong wrapper, missing required fields)
 > - ❌ `{"kind": "pyspark"}` → HTTP 500 (missing `driverMemory`, `executorMemory`, etc.)
 > - ✅ Flat JSON with `name`, `driverMemory`, `driverCores`, `executorMemory`, `executorCores` (and optionally `conf` with Starter Pool)
@@ -208,23 +259,6 @@ Quick reference:
 # See data-engineering-patterns.md for complete config tables
 ```
 
-### Variable Library in Notebooks
-Use a Variable Library to centralize lakehouse names, workspace IDs, and feature flags.
-
-```python
-# ✅ CORRECT — getLibrary() + dot notation
-lib = notebookutils.variableLibrary.getLibrary("MyConfig")
-lakehouse_name = lib.lakehouse_name
-enable_logging = lib.enable_logging  # returns string "true"/"false"
-
-# Boolean: compare as string (bool("false") is True in Python!)
-if enable_logging.lower() == "true":
-    print("Logging enabled")
-
-# ❌ WRONG — .get() does not exist, causes runtime failure
-# notebookutils.variableLibrary.get("MyConfig", "lakehouse_name")
-```
-
 ---
 
-**Focus**: Essential CLI patterns for Spark/data engineering development with intelligent routing to specialized resources. For comprehensive patterns, always reference COMMON-* files and resource documents.
+**Focus**: Essential CLI patterns for Spark/data engineering development and notebook code authoring, with intelligent routing to specialized resources. For comprehensive patterns, always reference COMMON-* files and resource documents.

@@ -1,0 +1,293 @@
+# Vally eval config -- migrated from tests/tests.json (skills-for-fabric)
+# Source stimuli: pipeline-migration-routing, pipeline-migration-inline-json-translate
+# Pattern: Wallace Breza PR microsoft/GitHub-Copilot-for-Azure#2235
+#          (sibling shape: tests/evals/synapse-migration/eval.yaml)
+#
+# Both stimuli are guidance/offline (forbid live API calls), so no runtime
+# placeholder substitution is needed -- prompts are passed to the model as-is.
+# See tests/evals/README.md for local-run instructions.
+#
+# Guidance-only / offline: both stimuli forbid live API calls, so there is no
+# Fabric-side artefact to inspect. The Layer 2 `program` verifier here therefore
+# inspects the only deterministic artefact an offline run produces -- the agent's
+# emitted answer -- and re-checks the canonical Synapse->Fabric Data Factory
+# translation invariants. Layered graders per stimulus:
+#   * Layer 1 (tool-calls): assert the agent made NO live Fabric API call.
+#   * Layer 2 (program):    tests/evals/_graders/pipeline-migration/verify-pipeline-translation.ps1
+#                           deterministically verifies the emitted output and,
+#                           critically, scopes the "globalParameters must not
+#                           survive" check to the emitted Fabric block, so a
+#                           legitimate source echo / before-after no longer
+#                           false-fails an otherwise-correct run (the brittleness
+#                           that flipped Layer 0 string graders red). The cheap
+#                           Layer 0 string checks remain as belt-and-suspenders;
+#                           Layer 1+2 are the authoritative signal.
+
+name: pipeline-migration-integration-eval
+description: |
+  Integration evaluation for pipeline-migration -- positive routing canaries plus
+  an offline JSON-translation stimulus for Synapse Data Factory -> Fabric Data
+  Factory migration. Both stimuli are guidance/offline (no Fabric calls); they
+  verify the skill is reached for pipeline-migration-shaped prompts and that the
+  canonical translation invariants are emitted.
+
+tags:
+  type: integration
+  skill: pipeline-migration
+
+environment:
+  skills:
+    - ../../../skills/pipeline-migration
+  # Stage the shared grader tree (Vally.Grader.psm1 helpers + this skill's
+  # verifier) into the run sandbox so the Layer 2 `program` grader can resolve
+  # tests/evals/_graders/pipeline-migration/verify-pipeline-translation.ps1.
+  files:
+    - src: ../_graders
+      dest: tests/evals/_graders
+
+config:
+  runs: 5
+  # Two-tier wall-time intent (deliberate):
+  #   * `timeout: 15m` here is the OUTER per-run harness ceiling -- gives the
+  #     executor headroom for model spin-up, transient retries, SDK overhead.
+  #   * `constraints.max_duration: 3m` per stimulus below is the ACTUAL budget
+  #     enforced as a `wall-time` grader; that is the scoring source of truth.
+  # Both are intentionally kept so a stuck harness can't hang a CI run even if
+  # the per-stimulus grader misfires.
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- pipeline-migration-routing --
+  # Source: tests/tests.json (area=pipeline-migration)
+  - name: "Routing positive -- pipeline migration steps"
+    prompt: |
+      I'm migrating Synapse Data Factory pipelines to Microsoft Fabric Data Factory. Explain the key migration steps, including how to handle SynapseNotebook activities, dataset references, and global parameters. Do not call any APIs or create any resources.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: pipeline-migration
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke). Token cap is a
+    # generous runaway ceiling, not a tight gate: once the skill loads (~5.6k of
+    # skill context) plus the guidance output and multi-turn cache accounting, a
+    # legitimate guidance run lands well above the terse-prompt estimate. wall-time,
+    # turn-count, and tool-call-count are the meaningful runaway guards here
+    # (sibling synapse-migration sets token-budget to 1.5M for the same reason).
+    constraints:
+      max_turns: 12
+      max_tokens: 300000
+      max_duration: 3m
+      reject_skills:
+        - synapse-migration
+        - spark-authoring-cli
+        - dataflows-authoring-cli
+    graders:
+      # ---- Layer 0 -- routing + completion (Vally built-ins) ----
+      - type: skill-invocation
+        config:
+          required:
+            - pipeline-migration
+          disallowed:
+            - synapse-migration
+            - spark-authoring-cli
+            - dataflows-authoring-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      # ---- Layer 0 -- deterministic translation invariants (narrative) ----
+      # Belt-and-suspenders positive checks; Layer 2 is the authoritative
+      # correctness signal. The brittle `output-not-matches globalParameters`
+      # forbid was removed: a guidance answer legitimately shows the deprecated
+      # form in a before/after to explain the rewrite, so the flat regex
+      # false-failed correct runs. The Layer 2 verifier asserts the modern form
+      # is present rather than forbidding the old form in explanatory prose.
+      - type: output-contains
+        config:
+          substring: "TridentNotebook"
+      - type: output-contains
+        config:
+          substring: "libraryVariables"
+      - type: output-matches
+        config:
+          pattern: "(?i)\\binlin(e|ed|ing)\\b"
+      # Forbid legacy Create-Connection payload shape (asander_microsoft
+      # review). Mirrors the same forbid on the translate stim -- the
+      # routing stim is guidance, but a model that drafts an example
+      # connection JSON inline must use the current API shape.
+      - type: output-not-matches
+        config:
+          pattern: '"connectorId"\s*:'
+      - type: output-not-matches
+        config:
+          pattern: '"singleCredential"\s*:'
+      # ---- Layer 1 -- offline tool-call assertion (Vally built-in) ----
+      - type: tool-calls
+        name: tool-calls-pipeline-migration-routing
+        config:
+          # Offline guidance: the prompt says "Do not call any APIs or create any
+          # resources." Assert the agent made NO live Fabric REST call and NO
+          # az rest mutation. Disallowed-only is the correct Layer 1 shape for an
+          # offline stim -- there is no required live call to assert; correctness
+          # is owned by the paired Layer 2 program verifier. The 6-alternation
+          # shell-tool name regex is the canonical set (see tests/evals/README.md)
+          # and is maintained as the &shell_tool anchor so every site -- here and
+          # on the translate stim below -- stays byte-identical.
+          disallowed:
+            - name: &shell_tool '(?i)^(bash|powershell|shell|run_in_terminal|functions\.bash|functions\.powershell)$'
+              command: '(?is)\baz\s+rest\b.*https://api\.fabric\.microsoft\.com\b'
+            - name: *shell_tool
+              command: '(?is)\baz\s+rest\b.*--method\s+(post|put|patch|delete)\b'
+      # ---- Layer 2 -- offline output verifier (program) ----
+      - type: program
+        name: verify-pipeline-translation-routing
+        config:
+          program: pwsh
+          args:
+            - -NoProfile
+            - -ExecutionPolicy
+            - Bypass
+            - -File
+            - tests/evals/_graders/pipeline-migration/verify-pipeline-translation.ps1
+          # Offline verifier: parses the trajectory output and applies regex --
+          # no live Fabric polling -- so a short ceiling is ample. 60s absorbs
+          # pwsh cold-start on a fresh runner.
+          timeout: 60s
+      # ---- Budget kill-switches (Vally metric-threshold family) ----
+      - type: token-budget
+        config:
+          max: 300000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "3m"
+      - type: turn-count
+        config:
+          max: 12
+      - type: tool-call-count
+        config:
+          max: 25
+
+  # -- pipeline-migration-inline-json-translate --
+  # Source: tests/tests.json (area=pipeline-migration)
+  - name: "Offline JSON translate -- Synapse pipeline + dataset -> Fabric"
+    prompt: |
+      I'm migrating a Synapse Data Factory pipeline to Microsoft Fabric Data Factory. Walk me through converting the pipeline and dataset below to the equivalent Fabric Data Factory artifacts. Fabric Data Factory has no standalone Dataset item type, so show me the resulting Fabric pipeline JSON with the dataset properties **inlined** into the Copy activity's source/sink blocks (no separate Fabric dataset artifact). Explain how the SynapseNotebook activity, the global parameter expression, and the dataset reference each change. Apply these substitutions: the Fabric notebook GUID for 'PrepNotebook' is 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'; the Fabric connection display name for linked service 'AzureBlobLinkedService' is 'My ADLS Connection'. Do not call any APIs or create any resources.
+
+      Synapse pipeline:
+      {"name":"IngestPipeline","properties":{"activities":[{"name":"RunPrep","type":"SynapseNotebook","typeProperties":{"notebook":{"referenceName":"PrepNotebook","type":"NotebookReference"},"parameters":{"env":{"value":"@pipeline().globalParameters.env_name","type":"Expression"}},"sparkPool":{"referenceName":"SparkPoolSmall","type":"BigDataPoolReference"}}},{"name":"CopyData","type":"Copy","inputs":[{"referenceName":"InputBlobDataset","type":"DatasetReference"}],"outputs":[{"referenceName":"OutputBlobDataset","type":"DatasetReference"}],"typeProperties":{"source":{"type":"BlobSource"},"sink":{"type":"BlobSink"}}}],"annotations":[]}}
+
+      Synapse dataset InputBlobDataset:
+      {"name":"InputBlobDataset","properties":{"type":"AzureBlob","linkedServiceName":{"referenceName":"AzureBlobLinkedService","type":"LinkedServiceReference"},"typeProperties":{"folderPath":"input/","fileName":"data.csv"}}}
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: pipeline-migration
+    # JSON translation is heavier than pure routing: the source JSON in context,
+    # the loaded skill (~5.6k), the guidance walk-through, and the emitted Fabric
+    # JSON all add up across turns. Token cap is a generous runaway ceiling, not a
+    # tight gate; wall-time/turn-count/tool-call-count are the meaningful guards.
+    constraints:
+      max_turns: 12
+      max_tokens: 300000
+      max_duration: 3m
+      reject_skills:
+        - synapse-migration
+        - dataflows-authoring-cli
+    graders:
+      # ---- Layer 0 -- routing + completion (Vally built-ins) ----
+      - type: skill-invocation
+        config:
+          required:
+            - pipeline-migration
+          disallowed:
+            - synapse-migration
+            - dataflows-authoring-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      # ---- Layer 0 -- deterministic transform invariants (narrative) ----
+      # Belt-and-suspenders positive checks on the prompt-mandated literal
+      # substitutions (robust: the model must emit these verbatim). Two brittle
+      # checks were removed and their authority moved to Layer 2:
+      #   * `output-contains libraryVariables.env_name` false-failed the block
+      #     form ("libraryVariables": { "env_name": ... }); Layer 2 accepts both
+      #     the expression and the block forms.
+      #   * `output-not-matches globalParameters` false-failed a legitimate
+      #     source echo / before-after; Layer 2 scopes the survival check to the
+      #     emitted Fabric pipeline block only.
+      # Notebook activity is renamed and references the substituted GUID.
+      - type: output-contains
+        config:
+          substring: "TridentNotebook"
+      - type: output-contains
+        config:
+          substring: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+      # Linked service -> connection display-name substitution applied.
+      - type: output-contains
+        config:
+          substring: "My ADLS Connection"
+      # Forbid the legacy/incorrect Create-Connection payload shape (per
+      # reviewer asander_microsoft). The current Fabric REST API has no
+      # top-level `connectorId` (use `connectionDetails.type` +
+      # `connectionDetails.creationMethod`) and no `singleCredential`
+      # wrapper (use `credentialDetails.credentials.*`). If a model emits
+      # the legacy form even in an example connection JSON, the guidance is
+      # silently wrong; these graders fail the run so the regression is
+      # caught at PR time. Docs:
+      # learn.microsoft.com/rest/api/fabric/core/connections/create-connection
+      - type: output-not-matches
+        config:
+          pattern: '"connectorId"\s*:'
+      - type: output-not-matches
+        config:
+          pattern: '"singleCredential"\s*:'
+      # ---- Layer 1 -- offline tool-call assertion (Vally built-in) ----
+      - type: tool-calls
+        name: tool-calls-pipeline-migration-translate
+        config:
+          # Same offline contract as the routing stim: no live Fabric call, no
+          # az rest mutation. Reuses the canonical &shell_tool anchor defined on
+          # the routing stim above so the name regex stays byte-identical.
+          disallowed:
+            - name: *shell_tool
+              command: '(?is)\baz\s+rest\b.*https://api\.fabric\.microsoft\.com\b'
+            - name: *shell_tool
+              command: '(?is)\baz\s+rest\b.*--method\s+(post|put|patch|delete)\b'
+      # ---- Layer 2 -- offline output verifier (program) ----
+      - type: program
+        name: verify-pipeline-translation-translate
+        config:
+          program: pwsh
+          args:
+            - -NoProfile
+            - -ExecutionPolicy
+            - Bypass
+            - -File
+            - tests/evals/_graders/pipeline-migration/verify-pipeline-translation.ps1
+          timeout: 60s
+      # ---- Budget kill-switches (Vally metric-threshold family) ----
+      - type: token-budget
+        config:
+          max: 300000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "3m"
+      - type: turn-count
+        config:
+          max: 12
+      - type: tool-call-count
+        config:
+          max: 25

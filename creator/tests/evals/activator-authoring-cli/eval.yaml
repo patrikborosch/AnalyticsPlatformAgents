@@ -1,0 +1,180 @@
+# Vally eval config -- migrated from tests/tests.json (skills-for-fabric)
+# Source stimuli: activator-authoring-create-basic, activator-authoring-create-alert-routing,
+#   activator-authoring-notify-me-routing
+#
+# Known gap: prompts contain {{WORKSPACE}} placeholder substituted at runtime by
+# tests/run-vally-eval.ps1. See tests/evals/README.md for local-run instructions.
+
+name: activator-authoring-cli-integration-eval
+description: |
+  Integration evaluation for activator-authoring-cli -- verifies creating
+  Activator items, alert rules, and notification rules with correct routing.
+
+tags:
+  type: integration
+  skill: activator-authoring-cli
+
+environment:
+  skills:
+    - ../../../skills/activator-authoring-cli
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- activator-authoring-create-basic --
+  - name: "Create basic Activator item"
+    prompt: |
+      In the {{WORKSPACE}} workspace, create an Activator item named
+      'eval_smoke_activator' with description 'Smoke test activator'. Then
+      confirm the item id. Only use the specified workspace. If not found,
+      report an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: activator
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - activator-consumption-cli
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - activator-authoring-cli
+          disallowed:
+            - activator-consumption-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-contains
+        config:
+          substring: "eval_smoke_activator"
+      - type: output-matches
+        config:
+          pattern: "(?i)activator"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- activator-authoring-create-alert-routing --
+  - name: "Create temperature alert rule"
+    prompt: |
+      In the {{WORKSPACE}} workspace, create an alert named
+      'eval_smoke_temperature_alert' that would notify me when a monitored
+      temperature becomes greater than 30. Only use the specified workspace. If
+      the required source data is missing, explain what source details are
+      needed before authoring the rule. Do NOT search or use any other
+      workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: activator
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - activator-authoring-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          pattern: "(?i)alert"
+      - type: output-matches
+        config:
+          pattern: "(?i)temperature"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- activator-authoring-notify-me-routing --
+  - name: "Create workspace event notification rule"
+    prompt: |
+      Notify me when a Fabric workspace event happens in the {{WORKSPACE}}
+      workspace by creating an Activator rule named
+      'eval_smoke_workspace_event_alert'. Only use the specified workspace. If
+      additional event/action details are required, ask for them explicitly. Do
+      NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: activator
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - activator-authoring-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: output-matches
+        config:
+          pattern: "(?i)activator"
+      - type: output-matches
+        config:
+          pattern: "(?i)rule"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50

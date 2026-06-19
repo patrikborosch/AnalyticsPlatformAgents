@@ -1,0 +1,225 @@
+# Vally eval config -- migrated from tests/tests.json (skills-for-fabric)
+# Source stimuli: eventstream-authoring-create-basic, eventstream-authoring-add-source,
+#   eventstream-authoring-add-filter, eventstream-authoring-deploy-topology
+#
+# Known gap: prompts contain {{WORKSPACE}} placeholder substituted at runtime by
+# tests/run-vally-eval.ps1. See tests/evals/README.md for local-run instructions.
+#
+# NOTE: These stimuli have no expectedResults in tests.json. Grading relies on
+# skill-invocation routing + completed. Output content is not validated.
+
+name: eventstream-authoring-cli-integration-eval
+description: |
+  Integration evaluation for eventstream-authoring-cli -- verifies creating
+  Eventstreams, adding sources/operators, and deploying topologies with correct
+  skill routing.
+
+tags:
+  type: integration
+  skill: eventstream-authoring-cli
+
+environment:
+  skills:
+    - ../../../skills/eventstream-authoring-cli
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- eventstream-authoring-create-basic --
+  - name: "Create basic Eventstream"
+    prompt: |
+      Create a new Eventstream called sensor-pipeline in my {{WORKSPACE}}
+      workspace. Only use the specified workspace. If not found, report an
+      error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: eventstream
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - eventstream-consumption-cli
+        - eventhouse-authoring-cli
+    # TODO(workload-team): backfill a deterministic positive output
+    # assertion (output-matches or output-contains on a tool-trace
+    # token, NOT on narrative prose). See tests/evals/README.md.
+    l0_exempt:
+      - positive-output-assertion
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - eventstream-authoring-cli
+          disallowed:
+            - eventstream-consumption-cli
+            - eventhouse-authoring-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- eventstream-authoring-add-source --
+  - name: "Add Event Hub source to Eventstream"
+    prompt: |
+      Add an Azure Event Hub source to my sensor-pipeline Eventstream in
+      {{WORKSPACE}}. Only use the specified workspace. If not found, report an
+      error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: eventstream
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+    # TODO(workload-team): backfill a deterministic positive output
+    # assertion (output-matches or output-contains on a tool-trace
+    # token, NOT on narrative prose). See tests/evals/README.md.
+    l0_exempt:
+      - positive-output-assertion
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - eventstream-authoring-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- eventstream-authoring-add-filter --
+  - name: "Add filter operator to Eventstream"
+    prompt: |
+      Add a Filter operator to my sensor-pipeline Eventstream that filters
+      events where temperature > 30 in my {{WORKSPACE}} workspace. Only use the
+      specified workspace. If not found, report an error. Do NOT search or use
+      any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: eventstream
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+    # TODO(workload-team): backfill a deterministic positive output
+    # assertion (output-matches or output-contains on a tool-trace
+    # token, NOT on narrative prose). See tests/evals/README.md.
+    l0_exempt:
+      - positive-output-assertion
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - eventstream-authoring-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- eventstream-authoring-deploy-topology --
+  - name: "Deploy full Eventstream topology"
+    prompt: |
+      Deploy an Eventstream called iot-pipeline with a SampleData source, a
+      Filter operator, and a Lakehouse destination writing to raw_events table
+      in my {{WORKSPACE}} workspace. Only use the specified workspace. If not
+      found, report an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: eventstream
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+    # TODO(workload-team): backfill a deterministic positive output
+    # assertion (output-matches or output-contains on a tool-trace
+    # token, NOT on narrative prose). See tests/evals/README.md.
+    l0_exempt:
+      - positive-output-assertion
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - eventstream-authoring-cli
+      - type: completed
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50

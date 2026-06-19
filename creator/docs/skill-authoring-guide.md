@@ -7,6 +7,22 @@ This guide explains how to create high-quality skills-for-fabric. Follow these p
 Every skill lives in its own folder under `skills/` with a `SKILL.md` file:
 
 ```
+
+## Ownership and contribution metadata
+
+Every checked-in skill must also have a matching entry in:
+
+```text
+.github/skill-ownership.yml
+```
+
+When adding or restructuring a skill:
+
+1. add or update the skill entry in the ownership manifest
+2. confirm the owning team bucket is still correct
+3. update smoke/eval coverage as needed for the changed behavior
+
+See [Contributor Kit](contributor-kit.md) for the practical checklist.
 skills/
 └── my-new-skill/
     ├── SKILL.md              # Required: main skill definition
@@ -89,14 +105,14 @@ Every skill except `check-updates` must include this notice:
 ### Pattern
 
 ```
-{endpoint_or_engine}-{authoring|consumption}-{access_method}
+{endpoint_or_engine}-{authoring|consumption|operations}-{access_method}
 ```
 
 | Component | Options | Examples |
 |-----------|---------|----------|
-| endpoint_or_engine | `sqldw`, `spark`, `eventhouse`, `pbi` | SQL Data Warehouse, Spark, Eventhouse, Power BI |
-| authoring/consumption | `authoring`, `consumption` | Developer vs. interactive use |
-| access_method | `cli`, `sdk`, `mcp` | CLI tools, SDK, MCP server |
+| endpoint_or_engine | `sqldw`, `sql`, `spark`, `eventhouse`, `powerbi` | SQL Data Warehouse, SQL (DW + Lakehouse SQL Endpoint), Spark, Eventhouse, Power BI |
+| authoring/consumption/operations | `authoring`, `consumption`, `operations` | Developer vs. interactive use vs. workload-operator diagnostics |
+| access_method | `cli`, `sdk`, `mcp`, `portal` | CLI tools (shipping default), MCP server (limited use), SDK and portal walk-through (**reserved -- no shipping skills today**; see [CONTRIBUTING.md § access-method status](../CONTRIBUTING.md#skill-category-governance)) |
 
 ### Examples
 
@@ -104,6 +120,7 @@ Every skill except `check-updates` must include this notice:
 |------------|---------|
 | `sqldw-authoring-cli` | Create/modify warehouse objects via CLI |
 | `sqldw-consumption-cli` | Query warehouse data via CLI |
+| `sqldw-operations-cli` | Diagnose warehouse performance via CLI |
 | `spark-authoring-cli` | Develop Spark jobs and notebooks |
 | `spark-consumption-cli` | Interactive Spark exploration |
 
@@ -131,7 +148,7 @@ If the workflow requires knowledge of **2+ workload endpoints** to be useful, pr
 
 Do not count authentication and workspace/catalog discovery in this threshold because those are shared prerequisites across all skills.
 
-## Authoring vs. Consumption
+## Authoring vs. Consumption vs. Monitoring
 
 ### Authoring Skills (`-authoring-`)
 
@@ -149,11 +166,21 @@ Content focus:
 Target: **Users exploring data interactively**
 
 Content focus:
-- Read-only queries (SELECT)
+- Read-only queries (SELECT) against user tables
 - Schema discovery
 - Data exploration
-- Monitoring and diagnostics
 - Ad-hoc analysis
+
+### Operations Skills (`-operations-`)
+
+Target: **Users diagnosing performance and operational health**
+
+Content focus:
+- System view queries (e.g., `queryinsights.*`, DMVs)
+- Multi-step diagnostic workflows (agentic investigation patterns)
+- Threshold-based classifications and recommendations
+- Guardrails preventing unsupported feature recommendations
+- Pressure detection, cache analysis, resource consumption profiling
 
 ## Writing Good Descriptions
 
@@ -354,7 +381,7 @@ This skill adds: **how to invoke** these patterns from an agentic terminal.
    }
    ```
 
-6. **Update CHANGELOG.md**
+6. **Add a `.changeset/PR<number>-<slug>.md` fragment** describing the new skill (see [`.changeset/README.md`](../.changeset/README.md)). Do **not** edit `CHANGELOG.md` directly.
 
 7. **Submit PR**
 
@@ -374,7 +401,7 @@ This skill adds: **how to invoke** these patterns from an agentic terminal.
 When updating a skill:
 
 1. **Run quality check before and after**
-2. **Update CHANGELOG.md** with your changes
+2. **Add a `.changeset/PR<number>-<slug>.md` fragment** with a `### Changed` or `### Fixed` subsection describing the update. See [`.changeset/README.md`](../.changeset/README.md). Do **not** edit `CHANGELOG.md` directly.
 3. **Verify cross-references still work**
 4. **Check that triggers don't now conflict** with other skills
 

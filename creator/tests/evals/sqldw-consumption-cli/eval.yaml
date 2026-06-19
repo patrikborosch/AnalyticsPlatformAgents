@@ -1,0 +1,148 @@
+# Vally eval config -- pilot migration from tests/tests.json (skills-for-fabric)
+# Source stimuli: tests/tests.json entries "sqldw-consumption-basic-query"
+# and "sqldw-consumption-advanced-query"
+#
+# Global graders (evaluate#125 workaround): completed + output-not-matches
+# are duplicated into every stimulus block below (per-stimulus pattern).
+#
+# Known gap: prompts contain {{WORKSPACE}} placeholder substituted at runtime by
+# tests/testFabricSkills.ps1. Vally has no built-in substitution today; real
+# outer-loop runs need a substituted copy. See inbox/vally-grader-pilot-2026-05-13.md.
+
+name: sqldw-consumption-cli-integration-eval
+description: |
+  Integration evaluation for sqldw-consumption-cli -- pilot migration of the
+  sqldw-consumption-basic-query and sqldw-consumption-advanced-query smoke
+  stimuli into the migrated Vally eval.yaml shape (skill-invocation + completed +
+  output-not-matches + output-contains for expectedResults parity with
+  tests/testFabricSkills.ps1).
+
+tags:
+  type: integration
+  skill: sqldw-consumption-cli
+
+environment:
+  skills:
+    - ../../../skills/sqldw-consumption-cli
+
+config:
+  runs: 5
+  timeout: "15m"
+  executor: copilot-sdk
+  model: claude-sonnet-4.6
+
+scoring:
+  threshold: 1.0
+
+stimuli:
+  # -- sqldw-consumption-basic-query --
+  # Source: tests/tests.json (area=sqldw)
+  - name: "SQL endpoint basic row count"
+    prompt: |
+      In Fabric, i have a lakehouse in the {{WORKSPACE}} workspace - named
+      LSEGDemo. Using the SQL endpoint, tell me how many rows are in the
+      nyctlc table? Only use the specified workspace. If not found, report
+      an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: sqldw
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+      reject_skills:
+        - spark-consumption-cli
+    graders:
+      # Positive AND negative routing in one built-in grader.
+      # Positive: sqldw-consumption-cli was activated.
+      # Negative: agent did NOT detour into spark.
+      - type: skill-invocation
+        config:
+          required:
+            - sqldw-consumption-cli
+          disallowed:
+            - spark-consumption-cli
+      # Global: has_output
+      - type: completed
+      # Global: no_runtime_failure
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      # expectedResults parity with smoke
+      - type: output-contains
+        config:
+          substring: "10,000"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
+
+  # -- sqldw-consumption-advanced-query --
+  # Source: tests/tests.json (area=sqldw)
+  - name: "SQL endpoint average trip distance by vendor"
+    prompt: |
+      In Fabric, i have a lakehouse in the {{WORKSPACE}} workspace - named
+      LSEGDemo. Using the SQL endpoint, get me the average trip distance
+      broken down by vendor id. Only use the specified workspace. If not
+      found, report an error. Do NOT search or use any other workspace.
+    tags:
+      type: integration
+      tier: smoke
+      cost: llm
+      area: sqldw
+    # Per-stimulus constraints (in-flight kill-switch, tier=smoke)
+    constraints:
+      max_turns: 35
+      max_tokens: 1500000
+      max_duration: 10m
+    graders:
+      - type: skill-invocation
+        config:
+          required:
+            - sqldw-consumption-cli
+      # Global: has_output
+      - type: completed
+      # Global: no_runtime_failure
+      - type: output-not-matches
+        config:
+          pattern: "(?i)fatal error|unhandled exception|stack trace"
+      # expectedResults parity with smoke -- tolerant of rounding (2.8 or 2.86)
+      - type: output-matches
+        config:
+          pattern: "2\\.8[0-9]?"
+      # expectedResults parity with smoke
+      - type: output-contains
+        config:
+          substring: "2.8"
+      - type: output-contains
+        config:
+          substring: "2.86"
+      - type: token-budget
+        config:
+          max: 1500000
+      - type: error-count
+        config:
+          max: 0
+      - type: wall-time
+        config:
+          max: "10m"
+      - type: turn-count
+        config:
+          max: 35
+      - type: tool-call-count
+        config:
+          max: 50
