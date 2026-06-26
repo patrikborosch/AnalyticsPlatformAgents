@@ -46,24 +46,37 @@ function Set-Output {
 
 # --- 1. Resolve target tag -----------------------------------------------------------------
 $cloneUrl = "https://github.com/$UpstreamRepo.git"
-if ([string]::IsNullOrWhiteSpace($Ref)) {
-    Write-Host "Resolving latest release tag for $UpstreamRepo ..."
-    $lines = git ls-remote --tags --refs $cloneUrl 2>$null
-    $tags = foreach ($l in $lines) {
-        if ($l -match 'refs/tags/(.+)$') {
-            $t  = $Matches[1]
-            $sv = ($t.TrimStart('v', 'V') -split '-')[0]
-            $parsed = $null
-            if ([version]::TryParse($sv, [ref]$parsed)) {
-                [pscustomobject]@{ Tag = $t; Ver = $parsed }
-            }
-        }
-    }
-    if (-not $tags) { throw "No semver tags found on $UpstreamRepo" }
-    $target = ($tags | Sort-Object Ver -Descending | Select-Object -First 1).Tag
+if (-not [string]::IsNullOrWhiteSpace($Ref)) {
+    $target = $Ref
 }
 else {
-    $target = $Ref
+    Write-Host "Resolving latest release tag for $UpstreamRepo ..."
+    $target = ''
+
+    # Method A: GitHub releases API via gh (reliable; uses GH_TOKEN/GITHUB_TOKEN in CI, keyring locally).
+    if (Get-Command gh -ErrorAction SilentlyContinue) {
+        $t = gh api "repos/$UpstreamRepo/releases/latest" --jq '.tag_name' 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($t)) { $target = $t.Trim() }
+    }
+
+    # Method B: parse remote tags via git. Clear any inherited auth header (actions/checkout sets
+    # http.https://github.com/.extraheader in the local repo config, which can break ls-remote here).
+    if ([string]::IsNullOrWhiteSpace($target)) {
+        $lines = git -c 'http.https://github.com/.extraheader=' ls-remote --tags --refs $cloneUrl 2>$null
+        $tags = foreach ($l in $lines) {
+            if ($l -match 'refs/tags/(.+)$') {
+                $tg = $Matches[1]
+                $sv = ($tg.TrimStart('v', 'V') -split '-')[0]
+                $parsed = $null
+                if ([version]::TryParse($sv, [ref]$parsed)) {
+                    [pscustomobject]@{ Tag = $tg; Ver = $parsed }
+                }
+            }
+        }
+        if ($tags) { $target = ($tags | Sort-Object Ver -Descending | Select-Object -First 1).Tag }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($target)) { throw "Could not resolve latest release tag for $UpstreamRepo" }
 }
 Write-Host "Target ref: $target"
 
