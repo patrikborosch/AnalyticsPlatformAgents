@@ -18,7 +18,7 @@
 [CmdletBinding()]
 param(
     [string]   $RepoRoot      = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path,
-    [string]   $UpstreamRepo  = 'gim-home/skills-for-fabric',
+    [string]   $UpstreamRepo  = 'microsoft/skills-for-fabric',
     [string]   $Ref           = '',
     [string[]] $MirrorDirs    = @('skills', 'common', 'docs', 'mcp-setup', 'prompt_examples', 'agents'),
     [string[]] $MirrorFiles   = @('CHANGELOG.md')
@@ -53,10 +53,21 @@ else {
     Write-Host "Resolving latest release tag for $UpstreamRepo ..."
     $target = ''
 
-    # Method A: GitHub releases API via gh (reliable; uses GH_TOKEN/GITHUB_TOKEN in CI, keyring locally).
+    # Method A: GitHub tags API via gh (reliable; uses GH_TOKEN/GITHUB_TOKEN in CI, keyring locally).
+    # Tags API works for any public repo regardless of whether a GitHub "Release" object exists.
     if (Get-Command gh -ErrorAction SilentlyContinue) {
-        $t = gh api "repos/$UpstreamRepo/releases/latest" --jq '.tag_name' 2>$null
-        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($t)) { $target = $t.Trim() }
+        $names = gh api --paginate "repos/$UpstreamRepo/tags" --jq '.[].name' 2>$null
+        if ($LASTEXITCODE -eq 0 -and $names) {
+            $tags = foreach ($n in $names) {
+                if ([string]::IsNullOrWhiteSpace($n)) { continue }
+                $sv = ($n.TrimStart('v', 'V') -split '-')[0]
+                $parsed = $null
+                if ([version]::TryParse($sv, [ref]$parsed)) {
+                    [pscustomobject]@{ Tag = $n.Trim(); Ver = $parsed }
+                }
+            }
+            if ($tags) { $target = ($tags | Sort-Object Ver -Descending | Select-Object -First 1).Tag }
+        }
     }
 
     # Method B: parse remote tags via git. Clear any inherited auth header (actions/checkout sets
