@@ -1,0 +1,51 @@
+name: sync-upstream-skills
+
+# Hop 1 of the update chain: poll upstream skills-for-fabric releases and, when a newer
+# release exists, overlay-sync it into creator/ (preserving custom skills) and open a PR.
+#
+# Trigger is pull-based because we do not own the upstream repo and cannot receive a push
+# notification from it. The daily schedule polls; workflow_dispatch lets you sync on demand.
+
+on:
+  schedule:
+    - cron: '17 6 * * *'   # daily at 06:17 UTC
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Upstream tag/branch to sync (blank = latest release)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-upstream-skills
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Overlay sync from upstream
+        id: sync
+        shell: pwsh
+        run: ./tools/sync-upstream-skills.ps1 -Ref "${{ github.event.inputs.ref }}"
+
+      - name: Create / update pull request
+        if: steps.sync.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: chore/sync-skills-for-fabric
+          delete-branch: true
+          title: ${{ steps.sync.outputs.pr_title }}
+          body: ${{ steps.sync.outputs.changelog }}
+          commit-message: ${{ steps.sync.outputs.pr_title }}
+          labels: upstream-sync
+          add-paths: |
+            creator/**
