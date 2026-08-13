@@ -42,7 +42,8 @@ Write-Host "Working in temporary folder: $tempFolder"
 
 | Agent | Role | Input | Output |
 |---|---|---|---|
-| **@architect** | Design technology-agnostic analytical architecture | Business requirements | `output/architecture-spec.md` |
+| **@requirements** | Elicit and document business requirements in plain language | Stakeholder interviews | `output/requirements.md` |
+| **@architect** | Design technology-agnostic analytical architecture | `output/requirements.md` | `output/architecture-spec.md` |
 | **@modeler** | Translate architecture into Microsoft Fabric blueprint | Architecture spec | `output/fabric-blueprint.md` |
 | **@creator** | Dispatch blueprint tasks to Fabric agents | Fabric blueprint | Dispatches to Fabric agents below |
 | **@FabricAdmin** | Workspace administration, governance, capacity, security | Task package from @creator | Workspace configuration |
@@ -53,16 +54,45 @@ Write-Host "Working in temporary folder: $tempFolder"
 
 ## Workflow Phases
 
+### Phase 0 — Requirements Engineering (`@requirements`)
+
+**Trigger:** New analytics platform initiative — no requirements document yet  
+**Agent:** `@requirements`  
+**Steps:**
+1. Conduct structured discovery interview with business stakeholders (plain language, no technical jargon)
+2. Document business context, goals, and success criteria
+3. Capture use case backlog with consumer roles and refresh expectations
+4. Inventory source systems from a business perspective
+5. Capture non-functional requirements (volume, freshness, compliance, recovery)
+6. Author business acceptance criteria (`AC-nnn`) — measurable, technology-free definitions of "working"
+7. Document assumptions, risks, and open questions
+8. Confirm and sign off requirements with the user
+9. Self-check against DoD-R and record the attestation
+10. Produce architect handoff summary referencing concrete IDs
+
+**Output:** `output/requirements.md`  
+**Validation before proceeding:** the Definition of Done (DoD-R) in `agents/requirements.md` is the single source of truth. Do not maintain a second, weaker checklist here. Confirm:
+
+- [ ] Gate A — Structure: all contract sections present, IDs unique and well-formed, no bare placeholders
+- [ ] Gate B — Content completeness: use cases, FR→UC traceability, source inventory, entity history decisions, all NFR categories
+- [ ] Gate C — Loop readiness: every NFR and every High-priority UC has a measurable, technology-free `AC-nnn`; Rework Intake section exists
+- [ ] Gate D — Stakeholder & scope: in/out of scope, sign-off owner, open questions owned, user confirmation recorded
+- [ ] Gate E — Handoff: references concrete IDs, no SCD types prescribed, open architectural questions listed
+- [ ] Definition of Done Attestation present, with `Status: Approved` — or `Provisional` with failing items listed and explicitly accepted by the user
+
+If Status is `Provisional`, you may advance, but you must warn the user which gates failed and flag the affected design areas as at-risk to `@architect`.
+
 ### Phase 1 — Architecture Design (`@architect`)
 
-**Trigger:** User describes data platform requirements  
+**Trigger:** `output/requirements.md` exists and is validated  
 **Agent:** `@architect`  
 **Steps:**
-1. Run discovery session — gather sources, requirements, constraints
-2. Produce Architecture Decision Records (ADRs)
-3. Define layer architecture (L0/L1/L2), metadata repository, pipeline engine
-4. Define SCD patterns, quality rules, rollback strategy
-5. Compile modeler handoff with object catalogue, column specs, pipeline specs
+1. Read `output/requirements.md` — parse use cases, entities, NFRs, source landscape
+2. Conduct targeted technical clarification (SCD preferences, schema style, technology stack)
+3. Produce Architecture Decision Records (ADRs)
+4. Define layer architecture (L0/L1/L2), metadata repository, pipeline engine
+5. Define SCD patterns, quality rules, rollback strategy
+6. Compile modeler handoff with object catalogue, column specs, pipeline specs
 
 **Output:** `output/architecture-spec.md`  
 **Validation before proceeding:**
@@ -131,7 +161,8 @@ Fabric agents work standalone — they use their skills and knowledge base direc
 
 ### Option C — Design-Only (Architecture / Modelling)
 Talk directly to the design agents:
-- `@architect` — for architecture design (technology-agnostic)
+- `@requirements` — for requirements elicitation and documentation (business language, no tech jargon)
+- `@architect` — for architecture design (technology-agnostic); can consume `output/requirements.md` or gather requirements directly
 - `@modeler` — for Fabric blueprint generation (requires architecture spec)
 
 ---
@@ -140,9 +171,10 @@ Talk directly to the design agents:
 
 When asked "where are we?" or "what's the status?", check:
 
-1. Does `output/architecture-spec.md` exist? → Phase 1 complete
-2. Does `output/fabric-blueprint.md` exist? → Phase 2 complete
-3. Are there files in `output/artifacts/`? → Phase 3 in progress (managed by `@creator`)
+1. Does `output/requirements.md` exist? → Phase 0 complete
+2. Does `output/architecture-spec.md` exist? → Phase 1 complete
+3. Does `output/fabric-blueprint.md` exist? → Phase 2 complete
+4. Are there files in `output/artifacts/`? → Phase 3 in progress (managed by `@creator`)
 
 Report which phase is current and what needs to happen next.
 
@@ -151,6 +183,13 @@ Report which phase is current and what needs to happen next.
 ## Handoff Validation
 
 Before allowing progression to the next phase, validate:
+
+### Requirements → Architect
+Read `output/requirements.md` and apply the Definition of Done (DoD-R) defined in `agents/requirements.md`. In addition, confirm the handoff is actionable:
+- Acceptance criteria (`AC-nnn`) are present, measurable, and technology-free — this is what `@validator` will enforce in Phase 4
+- Entities requiring history are listed **without** a prescribed SCD type
+- Open questions requiring architectural decisions are explicitly flagged
+- Definition of Done Attestation shows `Approved`, or `Provisional` with accepted gaps
 
 ### Architecture → Modeler
 Read `output/architecture-spec.md` and confirm:
@@ -170,7 +209,7 @@ Read `output/fabric-blueprint.md` and confirm:
 
 ## Principles
 
-1. **Sequential phases** — Architecture before Modelling before Creation. Never skip a phase.
+1. **Sequential phases** — Requirements before Architecture before Modelling before Creation. Never skip a phase.
 2. **Output as contract** — Each phase writes to `output/`. The next phase reads from there. No verbal handoffs.
 3. **Validate before advancing** — Always check completeness before moving to the next phase.
 4. **Agents are specialists** — Route to the right agent. Don't try to do another agent's job.

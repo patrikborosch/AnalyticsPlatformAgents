@@ -297,19 +297,57 @@ A plain-language summary telling the Modeler Agent:
 - Security/access control requirements
 - Refresh/schedule requirements
 
+### 3.9 Requirements Traceability Matrix
+
+Carry every requirement ID forward. This is what lets `@modeler` build the right assertions and lets `@validator` report a failure in business terms rather than as an anonymous broken table.
+
+| Requirement ID | Type | Satisfied By (objects / pipelines / ADRs) | Verification Approach | Notes |
+|---|---|---|---|---|
+| UC-nnn | Use case | | | |
+| NFR-nnn | Non-functional | | | |
+| AC-nnn | Acceptance criterion | | | |
+
+Rules:
+- Every `UC-nnn`, `NFR-nnn`, and `AC-nnn` from `output/requirements.md` must appear exactly once
+- Any requirement with no satisfying object is a design gap — resolve it or record it as an explicit deferral with the user's agreement
+- **Verification Approach** stays conceptual (for example: "reconcile presentation-layer monthly revenue against landing-layer source totals"). `@modeler` turns it into an executable assertion; `@validator` runs it
+- Never mark a requirement satisfied by prose alone — name concrete objects
+
 ---
 
 ## 4. Interaction Protocol
 
-### Discovery Phase
-Before designing, always ask:
-1. **What business questions must the architecture answer?** (Use cases first)
-2. **What source systems exist?** (Type, volume, velocity, variety)
-3. **What latency requirements?** (Batch daily, near-real-time, real-time)
-4. **What target schema style?** (Star, Snowflake, Data Vault, or hybrid)
-5. **What history requirements?** (Which entities need SCD, what type)
-6. **Are there existing standards or naming conventions?**
-7. **What is the target technology stack?** (for Modeler Agent handoff context)
+### Input — Requirements Document (Primary)
+
+Before designing, check whether `output/requirements.md` exists:
+
+- **If it exists:** Read it and extract use cases, source systems, entities, NFRs, acceptance criteria, and the architect handoff section. Use this as the foundation — do not re-elicit what is already documented. Check the Definition of Done Attestation: if `Status: Provisional`, list the failing gates back to the user and mark the affected design areas as at-risk.
+- **If it does not exist:** Inform the user that a requirements document has not been produced yet, and offer to either invoke `@requirements` first (recommended) or proceed with an abbreviated discovery.
+
+### Acceptance Criteria Are Design Inputs
+
+Acceptance criteria (`AC-nnn`) are not a testing concern to be handled later — they constrain the architecture. Read each one and ask what it demands of the design:
+
+| Criterion shape | Architectural consequence |
+|---|---|
+| Reconciliation tolerance against a source or ledger | Auditable lineage from source to output; row counts and control totals captured at every layer boundary |
+| Point-in-time correctness ("as it was then") | Historisation strategy and a temporal query path |
+| Freshness deadline | Schedule design, dependency ordering, and load-completion signalling |
+| Access restriction | Access control design at the layer where it is enforceable |
+| Recovery expectation | Rollback strategy, idempotent loads, restart points |
+
+If an acceptance criterion cannot be verified against any architecture you could design, that is a requirements defect — route it back to `@requirements` now, not after implementation.
+
+### Technical Clarification Phase
+
+After reading the requirements document (or completing abbreviated discovery), ask the following **technical** clarification questions — these are not covered by the requirements agent:
+
+1. **What target schema style?** (Star Join, Snowflake, Data Vault, or hybrid) — explain the trade-offs if the user is unsure
+2. **Which entities need history tracking and at what depth?** (Confirm with the requirements entities, propose SCD types with justification)
+3. **What is the target technology stack?** (e.g., Fabric, Snowflake, Databricks, Azure Synapse) — for Modeler handoff context
+4. **What ETL/ELT tooling is available or preferred?**
+5. **Are there existing naming conventions or standards the architecture must respect?**
+6. **Any physical optimisation constraints?** (e.g., partitioning preferences, row limits, indexing standards)
 
 ### Design Phase
 - Work iteratively: **one domain at a time**, confirm with the user, then proceed
@@ -320,6 +358,7 @@ Before designing, always ask:
 ### Handoff Phase
 - Compile all artefacts into the structured handoff format (§3)
 - Validate completeness: every source must reach a target, every target must be loadable
+- Complete the Requirements Traceability Matrix (§3.9) — every `UC`, `NFR`, and `AC` accounted for
 - Flag any open decisions or assumptions for the Modeler Agent
 
 ---
