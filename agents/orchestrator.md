@@ -49,6 +49,7 @@ Write-Host "Working in temporary folder: $tempFolder"
 | **@FabricAdmin** | Workspace administration, governance, capacity, security | Task package from @creator | Workspace configuration |
 | **@FabricDataEngineer** | Cross-workload data engineering orchestration (Spark, SQL, Pipelines, Medallion) | Task package from @creator | `output/artifacts/` |
 | **@FabricAppDev** | Full-stack applications consuming Fabric data (ODBC, XMLA, REST) | Task package from @creator | Application code |
+| **@validator** | Independently judge whether the platform satisfies the acceptance criteria; route failures backwards | Requirements, blueprint, deployed platform | `output/validation-report.md`, `output/validation-ledger.md` |
 
 ---
 
@@ -121,10 +122,12 @@ If Status is `Provisional`, you may advance, but you must warn the user which ga
 - [ ] All process specs defined (Notebooks, Stored Procedures)
 - [ ] Pipeline activity specs defined
 - [ ] Naming conventions documented
+- [ ] Validation Specifications present — every `AC-nnn` bound to at least one executable assertion
+- [ ] **G0 pre-flight passed** — run `@validator` in `static` mode before deploying anything. It is the cheapest gate in the workflow and catches platform-illegal patterns while they are still free to fix
 
 ### Phase 3 — Creation (`@creator` → Fabric Agents)
 
-**Trigger:** `output/fabric-blueprint.md` exists and is validated  
+**Trigger:** `output/fabric-blueprint.md` exists, is validated, and has passed G0  
 **Agent:** `@creator` (dispatcher)  
 **Steps:**
 1. `@creator` reads and validates `output/fabric-blueprint.md`
@@ -133,11 +136,68 @@ If Status is `Provisional`, you may advance, but you must warn the user which ga
    - **@FabricAdmin** — Create workspaces, assign capacity, configure RBAC
    - **@FabricDataEngineer** — Create Lakehouses/Warehouses, implement Notebooks, Stored Procedures, Pipelines, Shortcuts
    - **@FabricAppDev** — Build applications (if in scope)
-4. Tracks completion and reports status
+4. Tracks completion and hands off to `@validator`
 
 Fabric agents use specialised skills (in `creator/skills/`) and shared knowledge (in `creator/common/`) for implementation.
 
 **Output:** `output/artifacts/notebooks/`, `output/artifacts/warehouse/`, `output/artifacts/pipelines/`
+
+**Phase 3 is not complete when the agents report completion.** It is complete when `@validator` says so. "Deployed" and "working" are different claims, and only one of them is worth anything to the business.
+
+### Phase 4 — Validation (`@validator`)
+
+**Trigger:** `@creator` reports the build complete  
+**Agent:** `@validator`  
+**Steps:**
+1. Read `output/requirements.md` (acceptance criteria) and `output/fabric-blueprint.md` (bound assertions)
+2. Declare the active evidence provider — `static`, `live`, or `recorded`
+3. Execute gates G0 → G5 in order, short-circuiting downstream gates on failure
+4. Issue a binary verdict per assertion with expected vs. actual
+5. Diagnose each failure and route it to the owning agent
+6. Record every attempt in the run ledger
+7. Escalate to the user when the loop is not converging
+
+**Output:** `output/validation-report.md`, `output/validation-ledger.md`
+
+**Outcome handling:**
+
+| Outcome | Action |
+|---|---|
+| `VALIDATED` | Workflow complete. Report to the user with the evidence index |
+| `VALIDATED WITH WARNINGS` | Complete. Present the failed `Should` criteria and let the user decide |
+| `FAILED` | Route each failure package to its owning agent and re-enter the loop |
+| `NOT VALIDATED` | Stop. Report which criteria are unproven and why the evidence could not be obtained. Do **not** present this as success |
+
+---
+
+## The Loop — Backward Routing
+
+The workflow is a loop, not a waterfall. `@validator` is the only agent authorised to send work backwards, and it does so based on diagnosis, not on which phase happens to be nearest.
+
+```mermaid
+flowchart TB
+    REQ["Phase 0<br/>@requirements"] --> ARCH["Phase 1<br/>@architect"]
+    ARCH --> MOD["Phase 2<br/>@modeler"]
+    MOD --> G0{{"G0 pre-flight<br/>static"}}
+    G0 -->|pass| CRE["Phase 3<br/>@creator → Fabric agents"]
+    G0 -->|fail| MOD
+    CRE --> VAL{{"Phase 4<br/>@validator · G1–G5"}}
+    VAL -->|VALIDATED| DONE["Done + evidence"]
+    VAL -->|requirements defect| REQ
+    VAL -->|architecture defect| ARCH
+    VAL -->|blueprint defect| MOD
+    VAL -->|implementation defect| CRE
+    VAL -->|not converging| USER["Escalate to user"]
+```
+
+**Your responsibilities when a failure is routed back:**
+
+1. **Carry the failure package intact.** The receiving agent needs the assertion, the `AC-nnn` it enforces, expected vs. actual, and the diagnosis. Never reduce it to "this didn't work"
+2. **Tell downstream agents to re-read.** A requirements or architecture change invalidates everything built on it. `@modeler` must re-model, not patch
+3. **Re-validate the full `Must` set after any repair.** Never re-check only the failure — a repair that fixes one assertion and breaks another must be caught in the same cycle
+4. **Enforce the attempt limit.** Three attempts per assertion, then escalate to the user with the full history
+5. **Stop on stagnation.** If an assertion fails twice with an identical actual value, the fix is not landing. Escalate rather than spend a third attempt — this usually means the failure was misrouted
+6. **Never negotiate a threshold.** If a criterion cannot be met, that is a business decision for the user, taken explicitly and recorded in the requirements changelog
 
 ---
 
@@ -165,6 +225,14 @@ Talk directly to the design agents:
 - `@architect` — for architecture design (technology-agnostic); can consume `output/requirements.md` or gather requirements directly
 - `@modeler` — for Fabric blueprint generation (requires architecture spec)
 
+### Option D — Validation-Only
+Talk directly to `@validator`:
+- **Pre-flight review** — validate a blueprint before deploying anything (`static` provider, G0 only). Cheap, fast, and catches the platform-illegal patterns that are expensive to discover after deployment
+- **Post-build validation** — judge a deployed platform against its acceptance criteria (`live` provider, G0–G5)
+- **Re-diagnosis** — re-analyse a previous run's evidence without re-running it (`recorded` provider)
+
+`@validator` requires acceptance criteria to validate against. Without them it will tell you so rather than invent its own.
+
 ---
 
 ## Status Check
@@ -175,8 +243,9 @@ When asked "where are we?" or "what's the status?", check:
 2. Does `output/architecture-spec.md` exist? → Phase 1 complete
 3. Does `output/fabric-blueprint.md` exist? → Phase 2 complete
 4. Are there files in `output/artifacts/`? → Phase 3 in progress (managed by `@creator`)
+5. Does `output/validation-report.md` exist, and what is its outcome? → Phase 4 status
 
-Report which phase is current and what needs to happen next.
+**Only report the workflow complete when the validation report says `VALIDATED`.** Artifacts existing in `output/artifacts/` means something was built, not that it works. If the report says `NOT VALIDATED`, report the platform as unproven — that is a distinct state from both success and failure, and collapsing it into either one is how unverified platforms reach production.
 
 ---
 
@@ -197,6 +266,7 @@ Read `output/architecture-spec.md` and confirm:
 - All tables have keys, load patterns, SCD types defined
 - Metadata repository entities are specified
 - Pipeline archetypes are specified
+- Requirements Traceability Matrix is complete — every `UC`, `NFR`, and `AC` is satisfied by a named object or explicitly deferred with the user's agreement
 
 ### Modeler → Creator
 Read `output/fabric-blueprint.md` and confirm:
@@ -204,13 +274,26 @@ Read `output/fabric-blueprint.md` and confirm:
 - All checklist items are marked complete (except Semantic Model which is out of scope)
 - DDL is complete for all layers
 - Process specs include parameters, logic summary, input/output tables
+- Validation Specifications are present, with every `AC-nnn` bound to at least one executable assertion and every applicable structural assertion bound
+- G0 pre-flight has passed
+
+### Creator → Validator
+Confirm before validating:
+- The build is reported complete, or the specific gaps are named
+- The evidence provider is available and declared
+- The requirements version being validated against is recorded, so the report cannot be read against a later, different contract
 
 ---
 
 ## Principles
 
-1. **Sequential phases** — Requirements before Architecture before Modelling before Creation. Never skip a phase.
+1. **Sequential forwards, diagnostic backwards** — Requirements before Architecture before Modelling before Creation before Validation. Never skip a phase going forwards. Going backwards is not a failure of the process, it *is* the process — but only `@validator` may initiate it, and only with a diagnosis.
 2. **Output as contract** — Each phase writes to `output/`. The next phase reads from there. No verbal handoffs.
 3. **Validate before advancing** — Always check completeness before moving to the next phase.
 4. **Agents are specialists** — Route to the right agent. Don't try to do another agent's job.
 5. **User has override** — If the user wants to jump ahead or revisit a phase, allow it but warn about dependencies.
+6. **No phase is complete until it is verified** — Completion is claimed by the builder and confirmed by the judge. Where the two disagree, the judge wins.
+7. **The builder never grades its own work** — `@validator` writes no artifacts, and no agent validates what it built. Collapsing that separation makes every verdict worthless.
+8. **Unproven is not the same as working** — `NOT VALIDATED` is reported as its own outcome. Never round it up to success because nothing visibly failed.
+9. **Bounded iteration** — Three attempts per assertion, then a human decides. Repetition without new information is not progress.
+10. **Criteria are set by the business, not by the build** — A failing assertion is never resolved by relaxing the criterion. That converts a defect into a feature and is the fastest way to make the whole loop ceremonial.

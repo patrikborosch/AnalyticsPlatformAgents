@@ -631,7 +631,51 @@ For each layer boundary (L0→L1, L1→L2), the exact pattern:
 Workspace layout, role assignments, cross-workspace access patterns.
 - Ready for `@FabricAdmin` to execute
 
-### 12.6 Fabric Agent Handoff Checklist
+### 12.6 Validation Specifications
+
+**This section is what makes the platform verifiable.** `@requirements` states what must be true in business terms; you translate each statement into an executable assertion; `@validator` runs it. Skip this and the loop has nothing to enforce — the platform gets judged by whoever built it, which is no judgement at all.
+
+Bind assertions from `.resources/kb-validation-assertions.md`.
+
+#### 12.6.1 Structural Assertion Bindings
+
+Every table gets the structural assertions its pattern implies. These are automatic — nobody has to remember them, which is exactly why they catch what nobody remembered.
+
+| Assertion | Applies To | Bound Expression | Expected | Severity |
+|---|---|---|---|---|
+| VA-S01 | Every SCD2 dimension | *concrete query in the target dialect* | 0 rows | Must |
+| VA-S20 | Every fact table | | 0 rows | Must |
+| VA-S30 | Every layer transition | | Match within declared tolerance | Must |
+
+Binding rules:
+- Every SCD2 dimension binds VA-S01 through VA-S06
+- Every fact binds VA-S20, VA-S21, and VA-S22 where history is required
+- Every layer transition binds VA-S30 and VA-S31
+- Every scheduled load binds VA-S40 and VA-S43
+- Every access restriction binds VA-S50 **and** VA-S51 — the negative case is not optional
+
+#### 12.6.2 Business Assertion Bindings
+
+One entry per `AC-nnn` from `output/requirements.md`.
+
+| Assertion | Enforces | Statement (verbatim from requirements) | Bound Expression | Expected / Tolerance | Severity |
+|---|---|---|---|---|---|
+| VA-B01 | AC-nnn | | | | Must / Should |
+
+Binding rules:
+- **Copy the statement verbatim.** Paraphrasing is how a criterion quietly becomes weaker than what the business agreed to
+- **Copy the tolerance exactly.** Never round it, never widen it "for practicality". If it cannot be met, that is a business conversation, not a modelling decision
+- Every `AC-nnn` binds to at least one assertion. An unbound acceptance criterion is an unkept promise, and it is a blueprint defect
+- Every assertion must be capable of failing. If no realistic data state would make it fail, it is decoration — replace it
+
+#### 12.6.3 Acceptance Criteria Coverage
+
+| AC | Severity | Bound Assertions | Gate |
+|---|---|---|---|
+
+Every `AC-nnn` from the requirements appears here. Any with no binding is reported to `@architect` and `@requirements` before handoff — not discovered later by `@validator`.
+
+### 12.7 Fabric Agent Handoff Checklist
 
 Before handoff, verify each agent has what it needs:
 
@@ -640,8 +684,9 @@ Before handoff, verify each agent has what it needs:
 | **@FabricAdmin** | Workspace layout (§3.1), security plan, capacity assignment | ☐ |
 | **@FabricDataEngineer** | Artifact inventory (§3.2), all table DDL (§5), all process specs (§6), pipeline specs (§6.3), layer transitions (§7) | ☐ |
 | **@FabricAppDev** | Consumption patterns (§7.3), L2 table inventory, connection methods | ☐ (if applicable) |
+| **@validator** | Validation specifications (§12.6) — structural and business assertions bound, full AC coverage | ☐ |
 
-### 12.7 Mermaid Diagrams
+### 12.8 Mermaid Diagrams
 - **Fabric Architecture Diagram**: Workspaces, artifacts, data flow
 - **Pipeline Activity Diagram**: Flowchart of all pipeline activities
 - **Table Relationship Diagram**: ERD for each layer
@@ -664,6 +709,7 @@ Before handoff, verify each agent has what it needs:
 ### Creator Handoff
 - Compile all specifications into a structured document
 - Include pseudocode for every Notebook and Stored Procedure
+- Complete the Validation Specifications (§12.6) — every `AC-nnn` bound, every applicable structural assertion bound
 - Mark any decisions the Fabric agents need to make (e.g., exact Spark partition count)
 - Tag each section with the responsible Fabric agent so `@creator` can dispatch:
   - **@FabricAdmin**: Workspace layout, capacity, RBAC, governance
