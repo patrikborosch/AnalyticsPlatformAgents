@@ -9,6 +9,7 @@ A multi-agent system for designing and implementing analytics platforms on Micro
 | Agent | File | Role |
 |-------|------|------|
 | **Orchestrator** | `agents/orchestrator.md` | Coordinates the end-to-end workflow across all agents |
+| **Requirements** | `agents/requirements.md` | Elicits and documents business requirements in plain language before any technical design begins |
 | **Architect** | `agents/architect.md` | Designs technology-agnostic analytics architectures (layers, SCD patterns, metadata framework) |
 | **Modeler** | `agents/modeler.md` | Translates architecture specs into Fabric-specific blueprints (Lakehouse, Warehouse, Pipelines, Notebooks) |
 | **Creator** | `agents/creator.agent.md` | Dispatcher for Phase 3 — reads blueprint, decomposes tasks, dispatches to Fabric agents in order |
@@ -19,14 +20,17 @@ A multi-agent system for designing and implementing analytics platforms on Micro
 ## Workflow
 
 ```
-Discovery → Architecture Spec → Fabric Blueprint → Deployable Artifacts
-   (Architect)      (Architect)       (Modeler)    (Creator → FabricAdmin → FabricDataEngineer → FabricAppDev)
+Requirements → Architecture Spec → Fabric Blueprint → Deployable Artifacts
+ (Requirements)    (Architect)         (Modeler)    (Creator → FabricAdmin → FabricDataEngineer → FabricAppDev)
 ```
 
-1. **Discovery** — Architect interviews stakeholders to understand source systems, business entities, SLAs, grain, and reporting needs.
-2. **Architecture** — Architect produces `output/architecture-spec.md` with layer definitions, entity catalogue, data flow diagrams, and governance rules.
-3. **Modelling** — Modeler consumes the architecture spec and produces `output/fabric-blueprint.md` with Fabric artifact mappings, DDL, notebook specs, and pipeline definitions.
-4. **Creation** — `@creator` reads the blueprint, decomposes tasks, and dispatches to Fabric agents in order: `@FabricAdmin` (workspaces, governance) → `@FabricDataEngineer` (artifacts, pipelines) → `@FabricAppDev` (consuming applications).
+1. **Requirements** — Requirements agent interviews stakeholders to understand business goals, use cases, data consumers, source systems, and non-functional needs. Produces `output/requirements.md` in plain language, including the **acceptance criteria** (`AC-nnn`) that define what "working" means.
+2. **Technical Clarification** — Architect reads the requirements document and asks only what it cannot answer (schema style, SCD preferences, technology stack). Business elicitation is not repeated.
+3. **Architecture** — Architect produces `output/architecture-spec.md` with layer definitions, entity catalogue, data flow diagrams, governance rules, and a requirements traceability matrix.
+4. **Modelling** — Modeler consumes the architecture spec and produces `output/fabric-blueprint.md` with Fabric artifact mappings, DDL, notebook specs, and pipeline definitions.
+5. **Creation** — `@creator` reads the blueprint, decomposes tasks, and dispatches to Fabric agents in order: `@FabricAdmin` (workspaces, governance) → `@FabricDataEngineer` (artifacts, pipelines) → `@FabricAppDev` (consuming applications).
+
+Requirement IDs (`UC`, `NFR`, `AC`, `E`, `S`) are carried forward through every phase, so any downstream finding can be traced back to the business need that motivated it.
 
 ## Folder Structure
 
@@ -34,6 +38,7 @@ Discovery → Architecture Spec → Fabric Blueprint → Deployable Artifacts
 AnalyticsPlatformAgents/
 ├── agents/                    # Agent definitions (VS Code Copilot discovers these)
 │   ├── orchestrator.md
+│   ├── requirements.md        # NEW: Requirements Engineering Agent
 │   ├── architect.md
 │   ├── modeler.md
 │   ├── FabricDataEngineer.agent.md
@@ -41,7 +46,8 @@ AnalyticsPlatformAgents/
 │   ├── FabricAppDev.agent.md
 │   └── creator.agent.md
 ├── .prompts/                  # Reusable prompt files
-│   ├── 01-discovery.prompt.md
+│   ├── 00-requirements.prompt.md   # NEW: kick off requirements session
+│   ├── 01-technical-clarification.prompt.md
 │   ├── 02-architecture.prompt.md
 │   ├── 03-receive-handoff.prompt.md
 │   └── 04-fabric-blueprint.prompt.md
@@ -61,6 +67,7 @@ AnalyticsPlatformAgents/
 ├── output/                    # Runtime target for agent-generated deliverables
 │   └── artifacts/             # Skeleton (notebooks, warehouse, pipelines)
 ├── output_examples/           # Committed example deliverables
+│   ├── requirements.md        # NEW: Swiss Railway scenario example
 │   ├── architecture-spec.md
 │   ├── fabric-blueprint.md
 │   └── artifacts/
@@ -72,7 +79,8 @@ AnalyticsPlatformAgents/
 
 1. Open this folder as a VS Code workspace.
 2. Start with `@orchestrator` in Copilot Chat for a guided session, or invoke agents directly:
-   - `@architect` — Run discovery and generate architecture spec
+   - `@requirements` — Elicit and document business requirements (start here for new initiatives)
+   - `@architect` — Run technical clarification and generate architecture spec
    - `@modeler` — Consume architecture spec and generate Fabric blueprint
    - `@creator` — Dispatch blueprint tasks to Fabric agents in order
    - `@FabricDataEngineer` — Implement cross-workload Fabric solutions
@@ -112,6 +120,7 @@ Drop additional skill folders into `creator/skills/` following the same pattern 
 ## Sample Outputs
 
 The `output_examples/` folder contains example deliverables from a Swiss Railway Visitors analytics platform design:
+- `requirements.md` — Business requirements document with use case backlog, source inventory, NFRs, acceptance criteria, stakeholder register, DoD attestation, and architect handoff
 - `architecture-spec.md` — Three-layer architecture (Landing/Persistence/Presentation) with SCD2, metadata-driven ETL, 6 Mermaid diagrams
 - `fabric-blueprint.md` — Fabric implementation with Lakehouse (L0/L1), Warehouse (L2), Notebook specs, Pipeline definitions
 

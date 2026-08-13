@@ -4,8 +4,9 @@ This workspace contains a multi-agent system for analytics platform design and i
 
 ### Agent Team
 
-- **@orchestrator** (`agents/orchestrator.md`) — Start here for full workflows. Coordinates: Discovery → Architecture → Modelling → Creation.
-- **@architect** (`agents/architect.md`) — Designs technology-agnostic analytics architectures with layered patterns, SCD strategies, and metadata-driven pipelines.
+- **@orchestrator** (`agents/orchestrator.md`) — Start here for full workflows. Coordinates: Requirements → Architecture → Modelling → Creation.
+- **@requirements** (`agents/requirements.md`) — Elicits and documents business requirements in plain language before any technical design begins. Produces `output/requirements.md` with use case backlog, source inventory, NFRs, acceptance criteria (`AC-nnn`), and architect handoff. Owns the Definition of Done (DoD-R) for Phase 0.
+- **@architect** (`agents/architect.md`) — Designs technology-agnostic analytics architectures with layered patterns, SCD strategies, and metadata-driven pipelines. Reads `output/requirements.md` as primary input.
 - **@modeler** (`agents/modeler.md`) — Translates architecture specifications into Fabric-specific blueprints (Lakehouse, Warehouse, Notebooks, Pipelines). Produces agent-tagged handoff.
 - **@creator** (`agents/creator.agent.md`) — Dispatcher for Phase 3. Reads blueprint, decomposes tasks, and dispatches to Fabric agents in order.
 - **@FabricDataEngineer** (`agents/FabricDataEngineer.agent.md`) — Cross-workload Fabric data engineering orchestration. Works orchestrated (from @creator) or standalone (direct tasks).
@@ -14,7 +15,7 @@ This workspace contains a multi-agent system for analytics platform design and i
 
 ### Agent Invocation Modes
 
-**Full workflow:** `@orchestrator` → `@architect` → `@modeler` → `@creator` → `@FabricAdmin` → `@FabricDataEngineer` → `@FabricAppDev`
+**Full workflow:** `@orchestrator` → `@requirements` → `@architect` → `@modeler` → `@creator` → `@FabricAdmin` → `@FabricDataEngineer` → `@FabricAppDev`
 
 **Direct access:** Invoke any Fabric agent directly for ad-hoc tasks — no architecture spec or blueprint required. The agent gathers requirements conversationally.
 
@@ -36,12 +37,14 @@ Fabric agents (`@FabricDataEngineer`, `@FabricAdmin`, `@FabricAppDev`) reference
 ### Workflow Rules
 
 1. Agents produce output into `output/` — never overwrite without user confirmation.
-2. Architecture spec must exist before Modeler runs.
-3. Fabric blueprint must exist before orchestrated Creation (Phase 3) runs.
-4. Fabric agents can be invoked directly for standalone tasks without prerequisites.
-5. Each agent validates its input before starting work.
-6. Use Mermaid diagrams for all architectural visualisations.
-7. In Phase 3, `@creator` dispatches: `@FabricAdmin` first (workspaces), then `@FabricDataEngineer` (artifacts), then `@FabricAppDev` (apps).
+2. Requirements document should exist before Architect runs (recommended but not mandatory for ad-hoc tasks). Phase 0 completeness is governed by the Definition of Done (DoD-R) in `agents/requirements.md` — the single source of truth, not duplicated elsewhere.
+3. Requirement IDs (`UC-nnn`, `FR-nnn`, `NFR-nnn`, `S-nnn`, `E-nnn`, `AC-nnn`, `A-nnn`, `R-nnn`, `Q-nnn`) are assigned in Phase 0 and must be carried forward by every downstream agent. Never renumber an existing ID.
+4. Architecture spec must exist before Modeler runs.
+5. Fabric blueprint must exist before orchestrated Creation (Phase 3) runs.
+6. Fabric agents can be invoked directly for standalone tasks without prerequisites.
+7. Each agent validates its input before starting work.
+8. Use Mermaid diagrams for all architectural visualisations.
+9. In Phase 3, `@creator` dispatches: `@FabricAdmin` first (workspaces), then `@FabricDataEngineer` (artifacts), then `@FabricAppDev` (apps).
 
 ### Temporary Folder Management
 
@@ -50,7 +53,7 @@ Fabric agents (`@FabricDataEngineer`, `@FabricAdmin`, `@FabricAppDev`) reference
 - **Required:** Use `$env:TEMP` (Windows) or `/tmp` (Linux/Mac) for all temporary work
 - **Pattern:** Create timestamped subfolders: `$env:TEMP\AnalyticsPlatform_<timestamp>_<agent>`
 - **Behavior:** Log temp folder location at start; clean up or inform user after completion
-- **Repository writes:** Only for final deliverables: `output/architecture-spec.md`, `output/fabric-blueprint.md`, `output/artifacts/`
+- **Repository writes:** Only for final deliverables: `output/requirements.md`, `output/architecture-spec.md`, `output/fabric-blueprint.md`, `output/artifacts/`
 - **Forbidden:** Creating temporary folders inside the repository (prevents accidental commits of sensitive/temporary data)
 
 ### Naming Conventions
