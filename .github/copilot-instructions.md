@@ -9,13 +9,16 @@ This workspace contains a multi-agent system for analytics platform design and i
 - **@architect** (`agents/architect.md`) — Designs technology-agnostic analytics architectures with layered patterns, SCD strategies, and metadata-driven pipelines. Reads `output/requirements.md` as primary input.
 - **@modeler** (`agents/modeler.md`) — Translates architecture specifications into Fabric-specific blueprints (Lakehouse, Warehouse, Notebooks, Pipelines). Produces agent-tagged handoff.
 - **@creator** (`agents/creator.agent.md`) — Dispatcher for Phase 3. Reads blueprint, decomposes tasks, and dispatches to Fabric agents in order.
+- **@validator** (`agents/validator.md`) — Phase 4 independent judge. Executes validation gates G0–G5 against the acceptance criteria, issues binary verdicts with evidence, and routes failures back to the agent that owns the root cause. Never fixes anything itself.
 - **@FabricDataEngineer** (`agents/FabricDataEngineer.agent.md`) — Cross-workload Fabric data engineering orchestration. Works orchestrated (from @creator) or standalone (direct tasks).
 - **@FabricAdmin** (`agents/FabricAdmin.agent.md`) — Workspace administration, governance, capacity, security. Works orchestrated (from @creator) or standalone.
 - **@FabricAppDev** (`agents/FabricAppDev.agent.md`) — Full-stack application development consuming Fabric data. Works orchestrated (from @creator) or standalone.
 
 ### Agent Invocation Modes
 
-**Full workflow:** `@orchestrator` → `@requirements` → `@architect` → `@modeler` → `@creator` → `@FabricAdmin` → `@FabricDataEngineer` → `@FabricAppDev`
+**Full workflow:** `@orchestrator` → `@requirements` → `@architect` → `@modeler` → `@creator` → `@FabricAdmin` → `@FabricDataEngineer` → `@FabricAppDev` → `@validator`
+
+The workflow is a **loop, not a waterfall**. `@validator` is the only agent authorised to send work backwards, and it routes each failure to the phase that owns the root cause: requirements, architecture, blueprint, or implementation.
 
 **Direct access:** Invoke any Fabric agent directly for ad-hoc tasks — no architecture spec or blueprint required. The agent gathers requirements conversationally.
 
@@ -28,6 +31,7 @@ Architect & Modeler reference files in `.resources/`:
 - `kb-fabric-artifacts.md` — Fabric artifact catalogue and capabilities
 - `kb-fabric-patterns.md` — Fabric implementation patterns
 - `kb-fabric-datatypes.md` — Fabric-supported data types and mappings
+- `kb-validation-assertions.md` — Technology-agnostic assertion library used by `@modeler` (binding) and `@validator` (execution)
 
 Fabric agents (`@FabricDataEngineer`, `@FabricAdmin`, `@FabricAppDev`) reference files in `creator/`:
 - `creator/common/` — 9 shared knowledge files (COMMON-CORE, COMMON-CLI, SPARK-*, SQLDW-*, EVENTHOUSE-*, ITEM-DEFINITIONS-CORE)
@@ -40,11 +44,16 @@ Fabric agents (`@FabricDataEngineer`, `@FabricAdmin`, `@FabricAppDev`) reference
 2. Requirements document should exist before Architect runs (recommended but not mandatory for ad-hoc tasks). Phase 0 completeness is governed by the Definition of Done (DoD-R) in `agents/requirements.md` — the single source of truth, not duplicated elsewhere.
 3. Requirement IDs (`UC-nnn`, `FR-nnn`, `NFR-nnn`, `S-nnn`, `E-nnn`, `AC-nnn`, `A-nnn`, `R-nnn`, `Q-nnn`) are assigned in Phase 0 and must be carried forward by every downstream agent. Never renumber an existing ID.
 4. Architecture spec must exist before Modeler runs.
-5. Fabric blueprint must exist before orchestrated Creation (Phase 3) runs.
-6. Fabric agents can be invoked directly for standalone tasks without prerequisites.
-7. Each agent validates its input before starting work.
-8. Use Mermaid diagrams for all architectural visualisations.
-9. In Phase 3, `@creator` dispatches: `@FabricAdmin` first (workspaces), then `@FabricDataEngineer` (artifacts), then `@FabricAppDev` (apps).
+5. Fabric blueprint must exist before orchestrated Creation (Phase 3) runs, and must include Validation Specifications binding every `AC-nnn` to an executable assertion.
+6. Run the G0 pre-flight (`@validator` in `static` mode) before deploying anything — it needs no tenant access and catches platform-illegal specifications while they are still free to fix.
+7. Fabric agents can be invoked directly for standalone tasks without prerequisites.
+8. Each agent validates its input before starting work.
+9. Use Mermaid diagrams for all architectural visualisations.
+10. In Phase 3, `@creator` dispatches: `@FabricAdmin` first (workspaces), then `@FabricDataEngineer` (artifacts), then `@FabricAppDev` (apps).
+11. Phase 3 is complete when `@validator` returns `VALIDATED` — not when the build agents report completion. "Deployed" and "working" are different claims.
+12. No agent validates its own work. `@validator` writes no artifacts; builders issue no verdicts.
+13. `NOT VALIDATED` (criteria unproven) is reported as its own outcome. Never round it up to success because nothing visibly failed.
+14. A failing assertion is never resolved by relaxing the criterion. Requirements change only by explicit, recorded business decision.
 
 ### Temporary Folder Management
 
@@ -53,7 +62,7 @@ Fabric agents (`@FabricDataEngineer`, `@FabricAdmin`, `@FabricAppDev`) reference
 - **Required:** Use `$env:TEMP` (Windows) or `/tmp` (Linux/Mac) for all temporary work
 - **Pattern:** Create timestamped subfolders: `$env:TEMP\AnalyticsPlatform_<timestamp>_<agent>`
 - **Behavior:** Log temp folder location at start; clean up or inform user after completion
-- **Repository writes:** Only for final deliverables: `output/requirements.md`, `output/architecture-spec.md`, `output/fabric-blueprint.md`, `output/artifacts/`
+- **Repository writes:** Only for final deliverables: `output/requirements.md`, `output/architecture-spec.md`, `output/fabric-blueprint.md`, `output/artifacts/`, `output/validation-report.md`, `output/validation-ledger.md`
 - **Forbidden:** Creating temporary folders inside the repository (prevents accidental commits of sensitive/temporary data)
 
 ### Naming Conventions
