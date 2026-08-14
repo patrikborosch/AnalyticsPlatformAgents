@@ -24,7 +24,7 @@
 .EXAMPLE
     .\full-dependency-analysis.ps1
     .\full-dependency-analysis.ps1 -WorkspaceId "00000000-0000-4000-8000-000000000027"
-    .\full-dependency-analysis.ps1 -WorkspaceId "aeddd708-..." -SkipReportFields
+    .\full-dependency-analysis.ps1 -WorkspaceId "00000000-0000-4000-8000-000000000001" -SkipReportFields
 #>
 param(
     [string]$WorkspaceId,

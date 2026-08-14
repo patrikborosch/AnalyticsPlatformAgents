@@ -13,6 +13,8 @@ This workspace contains a multi-agent system for analytics platform design and i
 - **@FabricDataEngineer** (`agents/FabricDataEngineer.agent.md`) — Cross-workload Fabric data engineering orchestration. Works orchestrated (from @creator) or standalone (direct tasks).
 - **@FabricAdmin** (`agents/FabricAdmin.agent.md`) — Workspace administration, governance, capacity, security. Works orchestrated (from @creator) or standalone.
 - **@FabricAppDev** (`agents/FabricAppDev.agent.md`) — Full-stack application development consuming Fabric data. Works orchestrated (from @creator) or standalone.
+- **@FabricIQ** (`agents/FabricIQ.agent.md`) — Answers data questions about Power BI reports and semantic models: discovers artifacts, inspects schemas, generates and executes DAX. Standalone.
+- **@FabricMigrationEngineer** (`agents/FabricMigrationEngineer.agent.md`) — Orchestrates end-to-end workload migration to Fabric from Synapse, HDInsight, or Databricks. Standalone.
 
 ### Agent Invocation Modes
 
@@ -64,6 +66,21 @@ Fabric agents (`@FabricDataEngineer`, `@FabricAdmin`, `@FabricAppDev`) reference
 - **Behavior:** Log temp folder location at start; clean up or inform user after completion
 - **Repository writes:** Only for final deliverables: `output/requirements.md`, `output/architecture-spec.md`, `output/fabric-blueprint.md`, `output/artifacts/`, `output/validation-report.md`, `output/validation-ledger.md`
 - **Forbidden:** Creating temporary folders inside the repository (prevents accidental commits of sensitive/temporary data)
+
+### Sanitisation Rule — This Repository Is Public
+
+`output/` is gitignored, so runtime deliverables stay local. **`output_examples/` is deliberately tracked and therefore public.** Anything copied or promoted into it must be sanitised first — this boundary is where real tenant data has leaked before.
+
+Never commit, in any tracked file:
+
+- **Real tenant, capacity, workspace, or artifact GUIDs.** Replace with synthetic placeholders of the form `00000000-0000-4000-8000-0000000000NN`
+- **Real workspace, model, or report names** that reveal internal projects or identify a person
+- Credentials, connection strings with embedded secrets, bearer tokens, or JWTs
+- Local user paths (`C:\Users\<name>`, `/home/<name>`, `OneDrive - …`)
+
+When promoting a real run's output into `output_examples/`, replace every identifier before committing. The structure is what makes an example useful; the actual IDs never are.
+
+`.github/workflows/tenant-data-scan.yml` enforces this on every push and pull request.
 
 ### Naming Conventions
 

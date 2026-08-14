@@ -215,6 +215,8 @@ Talk directly to any Fabric agent without going through the full workflow. This 
 - `@FabricDataEngineer` — create/modify Notebooks, Lakehouses, Warehouses, Pipelines, run Medallion patterns
 - `@FabricAdmin` — workspace admin, capacity, governance, security, workspace documentation
 - `@FabricAppDev` — build applications consuming Fabric data (Python, ODBC, XMLA, REST)
+- `@FabricIQ` — ask data questions of Power BI reports and semantic models
+- `@FabricMigrationEngineer` — migrate workloads to Fabric from Synapse, HDInsight, or Databricks
 - `@creator` — dispatch a multi-agent creation task across Fabric agents
 
 Fabric agents work standalone — they use their skills and knowledge base directly without requiring `output/architecture-spec.md` or `output/fabric-blueprint.md`.

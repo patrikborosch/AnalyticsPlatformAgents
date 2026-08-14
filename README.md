@@ -16,6 +16,8 @@ A multi-agent system for designing and implementing analytics platforms on Micro
 | **FabricDataEngineer** | `agents/FabricDataEngineer.agent.md` | Cross-workload Fabric implementation — Spark, SQL, Pipelines, Medallion architecture |
 | **FabricAdmin** | `agents/FabricAdmin.agent.md` | Workspace administration, governance, capacity, security |
 | **FabricAppDev** | `agents/FabricAppDev.agent.md` | Full-stack applications consuming Fabric data (ODBC, XMLA, REST) |
+| **FabricIQ** | `agents/FabricIQ.agent.md` | Answers data questions about Power BI reports and semantic models — discovers artifacts, generates and executes DAX |
+| **FabricMigrationEngineer** | `agents/FabricMigrationEngineer.agent.md` | Orchestrates workload migration to Fabric from Synapse, HDInsight, or Databricks |
 | **Validator** | `agents/validator.md` | Independently judges whether the platform satisfies its acceptance criteria; routes failures back to the phase that owns the cause |
 
 ## Workflow
@@ -60,6 +62,8 @@ AnalyticsPlatformAgents/
 │   ├── FabricDataEngineer.agent.md
 │   ├── FabricAdmin.agent.md
 │   ├── FabricAppDev.agent.md
+│   ├── FabricIQ.agent.md
+│   ├── FabricMigrationEngineer.agent.md
 │   └── creator.agent.md
 ├── .prompts/                  # Reusable prompt files
 │   ├── 00-requirements.prompt.md
@@ -131,6 +135,10 @@ Run G0 before every deployment. It costs nothing, needs no tenant, and catches t
 **Temporary Folder Policy:** All agents use temporary folders outside the repository for scratch work. Agents create timestamped folders in `$env:TEMP` (Windows) or `/tmp` (Linux/Mac) for analysis, intermediate outputs, and temporary artifacts. Only final, publishable deliverables are written to `output/`.
 
 This prevents accidental commits of sensitive data (workspace IDs, subscription IDs, tenant-specific configurations) and keeps the repository clean for public sharing.
+
+**Sanitisation Policy:** This repository is public. `output/` is gitignored, but `output_examples/` is deliberately tracked — and that boundary is where real tenant data can leak. Anything promoted into `output_examples/` must first have real tenant, capacity, workspace, and artifact GUIDs replaced with synthetic placeholders (`00000000-0000-4000-8000-0000000000NN`), and real workspace or model names replaced with neutral ones. Credentials, tokens, and local user paths are never committed.
+
+`.github/workflows/tenant-data-scan.yml` enforces this on every push and pull request.
 
 ## Creator Skills (from skills-for-fabric)
 

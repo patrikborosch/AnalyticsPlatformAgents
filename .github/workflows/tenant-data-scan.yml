@@ -1,0 +1,69 @@
+name: Tenant Data & Secret Scan
+
+on:
+  push:
+    branches: [pats_main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan for real tenant identifiers and secrets
+        shell: bash
+        run: |
+          set -uo pipefail
+          fail=0
+
+          # Files we deliberately track that are the highest risk of carrying real
+          # tenant output. output/ is gitignored at runtime; output_examples/ is not.
+          scope="output_examples agents .resources .prompts"
+
+          echo "== 1. GUIDs that are not obviously synthetic =="
+          # Synthetic placeholders are all-zero, sequential, or repeated-letter patterns.
+          if grep -rInE '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b' $scope 2>/dev/null \
+             | grep -viE '00000000-0000|aaaaaaaa-bbbb|a1b2c3d4-e5f6|aaaa1111-bbbb|12345678-1234|xxxxxxxx' ; then
+            echo "::error::Non-synthetic GUID found. Replace real tenant/workspace/capacity IDs with synthetic placeholders."
+            fail=1
+          else
+            echo "ok"
+          fi
+
+          echo "== 2. Credentials =="
+          if grep -rInE '(client_secret|api[_-]?key|password)\s*[:=]\s*["'"'"']?[A-Za-z0-9/+_-]{16,}' $scope 2>/dev/null \
+             | grep -viE 'getSecret|secrets\.get|ConvertTo-SecureString|<[^>]*>|\{[^}]*\}|placeholder|example' ; then
+            echo "::error::Possible hardcoded credential."
+            fail=1
+          else
+            echo "ok"
+          fi
+
+          echo "== 3. Bearer / JWT tokens =="
+          if grep -rInE 'eyJ[A-Za-z0-9_-]{20,}\.' $scope 2>/dev/null ; then
+            echo "::error::Possible JWT / bearer token."
+            fail=1
+          else
+            echo "ok"
+          fi
+
+          echo "== 4. Local user paths =="
+          if grep -rInP 'C:\\Users\\(?!runneradmin|me\b)[A-Za-z0-9._-]+|/home/[A-Za-z0-9._-]+/|OneDrive - ' $scope 2>/dev/null ; then
+            echo "::error::Local user path leaked. Use \$env:TEMP or a placeholder."
+            fail=1
+          else
+            echo "ok"
+          fi
+
+          exit $fail
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true

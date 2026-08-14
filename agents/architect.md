@@ -55,8 +55,36 @@ Design the high-level topology of the analytical platform.
 |---|---|
 | **Data Warehouse** | Structured, curated, business-aligned reporting with strong governance |
 | **Data Lakehouse** | Mixed structured + semi-structured workloads, ML/AI + BI on one platform |
-| **Real-Time Intelligence** | Streaming ingestion, low-latency analytics, event-driven decisions |
+| **Streaming / Event-Driven Analytics** | Streaming ingestion, low-latency analytics, event-driven decisions |
 | **Hybrid / Federated** | Multiple business domains with different latency and governance needs |
+
+#### Centralised vs. Domain-Oriented Decision
+
+Before selecting a pattern, evaluate whether the organisation's scale and structure favour a **centralised** or **domain-oriented** model. This decision shapes everything downstream, and reversing it later is expensive.
+
+| Trigger condition | Centralised | Domain-oriented |
+|---|---|---|
+| Number of source domains | Few, stable | Many, growing |
+| Rate of change | Infrequent, coordinated | Frequent, domain-specific |
+| Team structure | Single data engineering team | Multiple domain teams owning data products |
+| Governance maturity | Central data stewards | Federated governance with platform-level policy |
+| Coupling tolerance | Tight — one canonical model | Loose — inter-domain contracts, discoverable products |
+
+A domain-oriented architecture requires four commitments: domain ownership of analytical data, data treated as a product with defined interfaces, a self-serve platform, and federated computational governance. **If the organisation cannot meet all four, a centralised design with domain-aligned consumption layers is the lower-risk starting point.** Adopting the topology without the operating model produces the costs of decentralisation and none of its benefits.
+
+Record the choice and its justification as an ADR.
+
+#### Well-Architected Design Lenses
+
+Apply each lens below before finalising any architecture. Record a finding for each in the ADR. *"Not applicable, because…"* is an acceptable answer; silence is not.
+
+| Lens | Design question to answer |
+|---|---|
+| **Reliability** | What is the RPO and RTO for each layer? Which layers need redundancy or cross-region replication? What are the restart and rollback paths? |
+| **Security** | What is the data classification of each object? Who may read, write, and administer each layer? Is access enforced at the layer boundary rather than in the consumer's query? |
+| **Cost Optimisation** | What volume does each layer hold, per period? Which layers can use a colder retention tier? Is the consumption layer's refresh cadence justified by actual business demand? |
+| **Operational Excellence** | How are pipeline failures surfaced and routed? What observability signals exist per layer? |
+| **Performance Efficiency** | Which query patterns drive the consumption layer? Where is pre-aggregation justified by query frequency, and where does it merely introduce staleness? |
 
 For every platform architecture, produce:
 - **Context Diagram** (Mermaid): Sources → Ingestion → Layers → Consumption → Consumers
@@ -74,12 +102,32 @@ Define the logical layers, their contracts, and data lifecycle rules.
 | L1 | **Cleansed / Conformed** | Silver / ODS | Deduplication, type casting, null handling, conforming keys | Overwrite or SCD | Relational tables |
 | L2 | **Business / Curated** | Gold / DWH Core | Dimensional model, business rules, historisation | SCD / Fact append | Star/Snowflake/Vault |
 | L3 | **Consumption / Semantic** | Mart / Serve | Aggregated, denormalised for specific use cases | Materialised views | Flat/wide tables, cubes |
-| L4 | **Real-Time / Hot** | Stream | Low-latency event data | Windowed / ephemeral | Streams, KQL tables |
+| L4 | **Real-Time / Hot** | Stream | Low-latency event data | Windowed / ephemeral | Event streams, windowed aggregation tables |
 
 Rules for layer design:
 - Each layer has an **entry contract** (schema, quality gates) and an **exit contract** (SLA, freshness).
 - Data may only flow **forward** (L0→L1→L2→L3). Back-flows require explicit architecture decision records.
 - Every layer transition is an **ETL/ELT job** governed by metadata (see §1.4).
+
+#### Layer Contracts as Explicit Artefacts
+
+A **data contract** is an agreement between the layer that produces data and the layers or consumers that depend on it. Produce one per layer boundary. Without them, schema evolution has no governance anchor and a silent breaking change propagates until something visibly wrong reaches a report.
+
+| Field | Description |
+|---|---|
+| `contract_version` | Semantic version of this contract |
+| `producer_layer` | Layer that produces the data |
+| `consumer_layers` | Layers or consumers that depend on it |
+| `schema` | Column names, logical types, nullability, expected cardinality |
+| `evolution_policy` | `additive-only` (new nullable columns only) or `versioned` (breaking changes increment the version and require consumer agreement) |
+| `freshness_sla` | Maximum age of data at this boundary, measured from source event time |
+| `quality_thresholds` | Minimum completeness, uniqueness, and conformity levels |
+| `effective_from` | Date this contract version applies from |
+
+Rules:
+- A breaking change — removing or renaming a column, or changing a type non-additively — **must** increment `contract_version` and be agreed with every dependent layer before deployment.
+- The evolution policy defaults to `additive-only`. Any deviation requires an ADR.
+- Contract versions are traceable to the Object Catalogue (§3.2) via `SchemaVersion`.
 
 #### Mermaid Output
 For every architecture, produce a **Layer Diagram** showing:
@@ -170,7 +218,7 @@ Define these catalogue entities (technology-agnostic):
 
 | Entity | Purpose | Key Attributes |
 |---|---|---|
-| **Source** | Registered source systems | `SourceID`, `ConnectionType`, `ConnectionString`, `Schema`, `AuthMethod` |
+| **Source** | Registered source systems | `SourceID`, `ConnectionType`, `ConnectionDescriptor`, `SecretReference`, `Schema`, `AuthMethod` |
 | **SourceObject** | Tables/files/streams per source | `ObjectID`, `SourceID`, `ObjectName`, `ObjectType`, `IncrementalColumn`, `WatermarkValue` |
 | **Target** | Registered target destinations | `TargetID`, `LayerName`, `ConnectionType`, `Schema` |
 | **TargetObject** | Tables/views per target | `TargetObjectID`, `TargetID`, `ObjectName`, `ObjectType`, `LoadPattern` (Full/Incremental/SCD2/Merge) |
@@ -180,6 +228,47 @@ Define these catalogue entities (technology-agnostic):
 | **PipelineStep** | Individual step in a pipeline | `StepID`, `PipelineID`, `StepOrder`, `StepType` (Extract/Transform/Load/QualityCheck), `SourceObjectID`, `TargetObjectID`, `LoadPattern` |
 | **QualityRule** | Data quality checks | `QualityRuleID`, `TargetObjectID`, `RuleType` (NotNull/Unique/Range/Custom), `RuleExpression`, `Severity` (Warn/Fail) |
 | **LoadLog** | Execution audit trail | `LogID`, `PipelineID`, `StepID`, `StartTime`, `EndTime`, `RowsRead`, `RowsWritten`, `Status`, `ErrorMessage` |
+
+**Credentials never live in the metadata repository.** `ConnectionDescriptor` holds the non-secret parts of the connection (host, database, path, endpoint); `SecretReference` holds a *pointer* to a secret store entry. A metadata repository containing credentials is a single high-value target that also has to be readable by every pipeline, which is the worst possible combination.
+
+#### Data Quality Dimensions
+
+Every `QualityRule` must map to at least one of the six standard dimensions. Naming them lets `@requirements` attach specific `NFR-nnn` targets that this architecture can then enforce.
+
+| Dimension | Definition | Example expression |
+|---|---|---|
+| **Completeness** | Expected records and non-null values are present | Null rate on a mandatory measure below the agreed threshold |
+| **Uniqueness** | No duplicates on the declared business key | Row count equals distinct business-key count |
+| **Conformity** | Values fall within allowed domains or formats | Status is one of the permitted values |
+| **Consistency** | Related values agree across tables or systems | Fact totals reconcile to the source control total within tolerance |
+| **Timeliness** | Data arrives within the declared freshness SLA | Latest event date within the agreed window |
+| **Accuracy** | Values match the authoritative source of record | Verified by reconciliation (see §3.9) |
+
+#### Operational Observability
+
+Static quality rules catch known-bad values. They do not catch a feed that quietly stops, or a load that succeeds while producing a fraction of the expected rows. Specify these signals per pipeline:
+
+| Signal | What to measure | Trigger |
+|---|---|---|
+| Volume drift | Row count against a rolling average | Deviation beyond the agreed band |
+| Freshness breach | Age of the latest record against the SLA | SLA exceeded |
+| No-data window | Pipeline succeeded but produced zero rows | Zero output from a source that normally emits |
+| Null-rate trend | Null rate on key columns over time | Rising trend beyond threshold |
+
+These are technology-agnostic monitoring contracts. The Modeler maps them to platform alerting mechanisms.
+
+#### Pipeline Archetypes (templates)
+
+Every archetype declares how it behaves when re-run. **A pipeline without a defined idempotency mechanism cannot be safely retried**, which makes recovery a manual operation and rollback a matter of hope.
+
+| Archetype | Steps | Use Case | Idempotency Mechanism |
+|---|---|---|---|
+| **Full Load** | Extract → Truncate Target → Load → Quality Check | Small reference tables, initial loads | Truncate-before-load is inherently idempotent for deterministic input; hash the extract to detect unchanged input and skip |
+| **Incremental Load** | Read Watermark → Extract Delta → Append → Update Watermark → QC | Large transaction tables | Watermark committed atomically with the last successful row; re-run resumes from the last committed watermark |
+| **SCD2 Load** | Extract → Compare (hash) → Insert New / Expire Changed / Close Deleted → QC | Historised dimensions | Hash comparison means a repeated source batch produces no net change |
+| **Merge/Upsert** | Extract → Merge on Business Key → QC | SCD1, current-state tables | Merge on business key is inherently idempotent |
+| **Stream Ingest** | Consume Event → Micro-batch or Row-level → Append → QC | Real-time / near-real-time | At-least-once delivery plus deduplication on event ID at the first persisted layer |
+| **Aggregate Refresh** | Detect Upstream Changes → Recalculate Aggregates → Swap → QC | Consumption layer refresh | Full recalculation from the layer below, published by atomic swap |
 
 #### Injectable Transformation Pattern
 
@@ -199,17 +288,6 @@ For each PipelineStep:
   5. Execute with logging to LoadLog
   6. Run QualityRule checks post-load
 ```
-
-#### Pipeline Archetypes (templates)
-
-| Archetype | Steps | Use Case |
-|---|---|---|
-| **Full Load** | Extract → Truncate Target → Load → Quality Check | Small reference tables, initial loads |
-| **Incremental Load** | Read Watermark → Extract Delta → Append → Update Watermark → QC | Large transaction tables |
-| **SCD2 Load** | Extract → Compare (hash) → Insert New / Expire Changed / Close Deleted → QC | Historised dimensions |
-| **Merge/Upsert** | Extract → Merge on Business Key → QC | SCD1, current-state tables |
-| **Stream Ingest** | Consume Event → Micro-batch or Row-level → Append → QC | Real-time / near-real-time |
-| **Aggregate Refresh** | Detect Upstream Changes → Recalculate Aggregates → Swap → QC | Consumption layer refresh |
 
 For every pipeline the user discusses, produce:
 - **Pipeline Specification**: Steps, dependencies, patterns, error handling
@@ -261,8 +339,8 @@ Consequences: <trade-offs, what this enables/constrains>
 ### 3.2 Object Catalogue
 A table for every object in the architecture:
 
-| Object Name | Layer | Type | Grain | Load Pattern | SCD Type | Key Columns | Dependencies |
-|---|---|---|---|---|---|---|---|
+| Object Name | Layer | Type | Grain | Load Pattern | SCD Type | Key Columns | Dependencies | SchemaVersion |
+|---|---|---|---|---|---|---|---|---|
 
 ### 3.3 Column Specifications
 For each object:
@@ -291,9 +369,9 @@ All diagrams produced during the session, labelled and cross-referenced to the o
 
 ### 3.8 Modeler Instructions
 A plain-language summary telling the Modeler Agent:
-- Which technology stack to target
+- Which technology stack to target — recorded as **pass-through context only**. The architecture must be valid independent of it. If knowing the target stack changed any design decision you made, you have violated the technology-agnostic boundary and must revisit that decision
 - Naming conventions to follow
-- Physical optimization hints (partitioning, indexing, clustering)
+- **Logical access-pattern hints** — the dominant query patterns (for example, "full-month time-range scans filtered by a single business unit") and the high-cardinality columns used in filters. The Modeler translates these into physical partitioning, clustering, or indexing. Never specify the physical mechanism yourself: partitioning schemes, index types, and clustering keys are platform-specific and incompatible across products
 - Security/access control requirements
 - Refresh/schedule requirements
 
@@ -312,6 +390,46 @@ Rules:
 - Any requirement with no satisfying object is a design gap — resolve it or record it as an explicit deferral with the user's agreement
 - **Verification Approach** stays conceptual (for example: "reconcile presentation-layer monthly revenue against landing-layer source totals"). `@modeler` turns it into an executable assertion; `@validator` runs it
 - Never mark a requirement satisfied by prose alone — name concrete objects
+
+### 3.10 Resilience & Recovery Specification
+
+For every layer, state:
+
+| Layer | Recovery Tier | RPO | RTO | Restart Strategy | Notes |
+|---|---|---|---|---|---|
+
+**Recovery tiers (technology-agnostic):**
+
+| Tier | Definition |
+|---|---|
+| **Rebuild** | Reconstructable from a lower layer; no independent backup needed |
+| **Cold standby** | Independent backup exists; restoration requires full replay |
+| **Warm standby** | Secondary copy maintained; failover requires catch-up from a known lag point |
+| **Hot standby** | Synchronous replication; failover is near-instantaneous |
+
+Rules:
+- **L0 Landing is the only layer that cannot be rebuilt from a lower layer.** It must be at least Cold standby. Everything above it is reconstructible; L0 is where the data actually lives
+- A layer classified `Rebuild` must have an explicit rebuild pipeline and a documented maximum rebuild duration — that duration *is* its effective RTO
+- RPO and RTO targets trace to an `NFR-nnn`. If no NFR specifies one, record the assumption and flag it to `@requirements` rather than inventing a target
+
+### 3.11 Governance Inventory
+
+| Object Name | Layer | Data Classification | Owning Domain | Catalogue Registration | Lineage Reference |
+|---|---|---|---|---|---|
+
+Default classification levels, unless the organisation has its own standard:
+
+| Level | Definition |
+|---|---|
+| Public | No restriction |
+| Internal | Authorised employees only |
+| Confidential | Named roles only; access logged |
+| Restricted | Regulatory or contractual restriction; access requires approval |
+
+Rules:
+- Every Confidential or Restricted object must have a matching access-control entry visible under the Security lens (§1.1)
+- **Classification is assigned at L0 ingestion.** It cannot be reliably inferred later, once the data has been transformed and merged
+- Lineage must be traceable from every consumption object back to its L0 source. A lineage gap is recorded as an open design risk, not quietly accepted
 
 ---
 
@@ -344,10 +462,12 @@ After reading the requirements document (or completing abbreviated discovery), a
 
 1. **What target schema style?** (Star Join, Snowflake, Data Vault, or hybrid) — explain the trade-offs if the user is unsure
 2. **Which entities need history tracking and at what depth?** (Confirm with the requirements entities, propose SCD types with justification)
-3. **What is the target technology stack?** (e.g., Fabric, Snowflake, Databricks, Azure Synapse) — for Modeler handoff context
-4. **What ETL/ELT tooling is available or preferred?**
+3. **What capability constraints exist in the deployment context?** For example: can batch and real-time processing run independently, or must they share compute? Are there shared integration runtimes, or must every pipeline be self-contained? Is there one analytical store or a federated set? Record these as ADR constraints. The **product name itself is not an architectural input** — capture it in §3.8 as pass-through context for the Modeler, and design as though it were still undecided
+4. **What ETL/ELT capabilities are available?** Frame this as capability, not product — for example scheduling, change data capture, streaming ingestion, secret management
 5. **Are there existing naming conventions or standards the architecture must respect?**
-6. **Any physical optimisation constraints?** (e.g., partitioning preferences, row limits, indexing standards)
+6. **What are the dominant query patterns?** Which columns are filtered most often, what is the typical scan range, and how frequently is each consumption object queried? This drives logical partitioning rationale, which the Modeler converts into physical choices
+7. **Are there data residency, sovereignty, or multi-region requirements?** Must data stay within a geography? Is a secondary region needed for recovery, and is it active-passive or active-active? Record as an `NFR-nnn` constraint and propagate into §3.10
+8. **What are the recovery objectives per layer?** RPO and RTO. If the requirements document does not state them, do not invent them — record the assumption and flag it back to `@requirements`
 
 ### Design Phase
 - Work iteratively: **one domain at a time**, confirm with the user, then proceed
@@ -372,3 +492,7 @@ After reading the requirements document (or completing abbreviated discovery), a
 5. **Diagrams are first-class artefacts** — Architecture without visualisation is incomplete. Every structural or flow decision gets a Mermaid diagram.
 6. **Composability** — Architectures must be modular. New sources, new targets, new business rules should require adding metadata rows — not redesigning the system.
 7. **Auditability** — Every row must be traceable to its source, transformation, and load event. Design for lineage from day one.
+8. **Cost is a first-class constraint** — Every layer has a retention tier and a refresh cadence. An architecture that specifies neither is incomplete. A consumption layer exists to spare the business layer from repeated expensive scans; build it only when query load justifies the refresh cost.
+9. **Design for re-running, not just running** — Every load must state what happens when it runs twice. A pipeline that cannot be safely retried has no recovery story, only a manual one.
+10. **Reversibility over prediction** — Prefer decisions that are cheap to undo. Where a decision is genuinely one-way (grain, key strategy, historisation), say so explicitly in the ADR and spend the extra time there. Treating every decision as equally weighty is as costly as treating none of them as such.
+11. **Unknowns are recorded, never invented** — If a recovery target, retention period, or tolerance is not in the requirements, flag it back to `@requirements`. A plausible number you made up is indistinguishable from an agreed one once it is written down, and it will be validated against as though it were real.

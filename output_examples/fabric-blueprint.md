@@ -61,7 +61,7 @@
 | 1 | `ws-analytics-landing` | Production | `lh_landing`, `nb_ingest_generic`, `pl_main_orchestrator` | Raw data ingestion from all sources | Pipeline SP, Data Engineers |
 | 2 | `ws-analytics-persist` | Production | `lh_persist`, `nb_scd2_merge`, `nb_incremental_load`, `nb_quality_check` | SCD2 historisation, quality enforcement | Pipeline SP, Data Engineers |
 | 3 | `ws-analytics-present` | Production | `wh_present`, `sp_refresh_presentation`, `sp_refresh_aggregate` | Business-ready star schema | Pipeline SP, Analysts, Report Viewers |
-| 4 | `ws-analytics-meta` | Shared | `wh_meta` | Metadata repository, audit log, rollback tracking | Pipeline SP, Platform Team |
+| 4 | `ws-analytics-present` | Production | `wh_meta` | Metadata repository, audit log, rollback tracking. **Co-located with `wh_present`** so stored procedures can read metadata and write audit rows using same-workspace three-part naming | Pipeline SP, Platform Team |
 
 ### Capacity Assignment
 
@@ -70,7 +70,7 @@
 | `ws-analytics-landing` | F4 (dev) / F8 (prod) | Spark workloads for file parsing, DB extraction |
 | `ws-analytics-persist` | F4 (dev) / F8 (prod) | Heavy SCD2 MERGE operations on Delta tables |
 | `ws-analytics-present` | F2 (dev) / F4 (prod) | T-SQL workloads, lighter than Spark |
-| `ws-analytics-meta` | F2 | Small metadata tables, low compute |
+| (`wh_meta` shares `ws-analytics-present`) | — | Small metadata tables, low compute |
 
 ---
 
@@ -103,10 +103,10 @@ graph LR
         WH_L2["wh_present<br/>(Warehouse)"]
         SP_REF["sp_refresh_presentation<br/>(Stored Procedure)"]
         SP_AGG["sp_refresh_aggregate<br/>(Stored Procedure)"]
-        SC_L1["Shortcut → lh_persist"]
+        SC_L1["lh_bridge (Lakehouse)<br/>Shortcuts → lh_persist"]
     end
 
-    subgraph WS_META["ws-analytics-meta"]
+    subgraph WS_META["ws-analytics-present (wh_meta co-located)"]
         WH_META["wh_meta<br/>(Warehouse)"]
         SP_META["sp_get_pipeline_metadata<br/>(Stored Procedure)"]
     end
@@ -147,7 +147,7 @@ graph LR
 
 ```mermaid
 graph TD
-    subgraph WS_META["ws-analytics-meta"]
+    subgraph WS_META["ws-analytics-present (wh_meta co-located)"]
         WH_META["wh_meta"]
     end
 
@@ -212,8 +212,8 @@ COMMENT 'L0 Landing — bit-exact copy from {source_system}.{source_object}'
 #### Delta Properties (L0)
 
 ```
-delta.autoOptimize.optimizeWrite = true
-delta.autoOptimize.autoCompact = true
+delta.parquet.vorder.enabled = true
+-- delta.autoOptimize.* are Databricks-only and have no effect in Fabric
 delta.logRetentionDuration = 30 days
 delta.deletedFileRetentionDuration = 30 days
 ```
@@ -334,8 +334,8 @@ COMMENT 'L1 Persistence — SCD2 dimension with full history'
 #### Delta Properties (L1 Dimensions)
 
 ```
-delta.autoOptimize.optimizeWrite = true
-delta.autoOptimize.autoCompact = true
+delta.parquet.vorder.enabled = true
+-- delta.autoOptimize.* are Databricks-only and have no effect in Fabric
 delta.logRetentionDuration = 30 days
 delta.deletedFileRetentionDuration = 30 days
 ```
@@ -620,10 +620,9 @@ CREATE TABLE [present].[dim_customer] (
     CustomerStatus          VARCHAR(20)     NULL,
     _LastRefreshTimestamp    DATETIME2(3)    NOT NULL,
 
-    CONSTRAINT PK_dim_customer PRIMARY KEY NONCLUSTERED (SK_Customer)
+    CONSTRAINT PK_dim_customer PRIMARY KEY NONCLUSTERED (SK_Customer) NOT ENFORCED
 );
 
-CREATE INDEX IX_dim_customer_BK ON [present].[dim_customer] (BK_Customer);
 GO
 ```
 
@@ -641,12 +640,9 @@ CREATE TABLE [present].[fact_sales] (
     M_Discount              DECIMAL(5,2)    NULL,
     _LastRefreshTimestamp    DATETIME2(3)    NOT NULL,
 
-    CONSTRAINT PK_fact_sales PRIMARY KEY NONCLUSTERED (SK_Sales)
+    CONSTRAINT PK_fact_sales PRIMARY KEY NONCLUSTERED (SK_Sales) NOT ENFORCED
 );
 
-CREATE INDEX IX_fact_sales_FK_Customer ON [present].[fact_sales] (FK_Customer);
-CREATE INDEX IX_fact_sales_FK_Product ON [present].[fact_sales] (FK_Product);
-CREATE INDEX IX_fact_sales_FK_Date ON [present].[fact_sales] (FK_Date);
 GO
 ```
 
@@ -662,7 +658,7 @@ CREATE TABLE [present].[agg_sales_monthly] (
     M_TransactionCount      INT             NULL,
     _LastRefreshTimestamp    DATETIME2(3)    NOT NULL,
 
-    CONSTRAINT PK_agg_sales_monthly PRIMARY KEY NONCLUSTERED (FK_Customer, FK_Product, YearMonth)
+    CONSTRAINT PK_agg_sales_monthly PRIMARY KEY NONCLUSTERED (FK_Customer, FK_Product, YearMonth) NOT ENFORCED
 );
 GO
 ```
@@ -689,7 +685,7 @@ Logic Summary:
           MERGE INTO [present].[{ObjectName}] AS tgt
           USING (
               SELECT {all_mapped_columns}
-              FROM [shortcut_lh_persist].[dbo].[{ObjectName}]
+              FROM [lh_bridge].[dbo].[{ObjectName}]
               WHERE _IsCurrent = 1 AND _IsDeleted = 0
           ) AS src
           ON tgt.{BusinessKeyColumns} = src.{BusinessKeyColumns}
@@ -700,7 +696,7 @@ Logic Summary:
   Step 4: Return row count and status
 
 Cross-Workspace Access:
-  - Reads from: lh_persist via Shortcut (registered as [shortcut_lh_persist] in wh_present)
+  - Reads from: lh_persist via OneLake Shortcuts hosted in the bridge Lakehouse [lh_bridge] in ws-analytics-present (shortcuts cannot be created inside a Warehouse)
   - Reads metadata from: wh_meta via cross-database query
 
 Error Handling:
@@ -736,7 +732,7 @@ BEGIN
         USING (
             SELECT SK_Customer, BK_Customer, CustomerName, Category,
                    CustomerEmail, CustomerStatus
-            FROM [shortcut_lh_persist].[dbo].[dim_customer]
+            FROM [lh_bridge].[dbo].[dim_customer]
             WHERE _IsCurrent = 1 AND _IsDeleted = 0
         ) AS src
         ON tgt.BK_Customer = src.BK_Customer
@@ -807,12 +803,12 @@ Error Handling: TRY/CATCH with log and THROW
 
 | Property | Value |
 |---|---|
-| Source | `lh_persist.dim_*` / `lh_persist.fact_*` (via OneLake Shortcut into `wh_present`) |
+| Source | `lh_persist.dim_*` / `lh_persist.fact_*` via OneLake Shortcuts in the bridge Lakehouse `lh_bridge` (ws-analytics-present) |
 | Target | `wh_present.[present].[dim_*]` / `[present].[fact_*]` / `[present].[agg_*]` |
 | Dimension Pattern | CurrentState MERGE (`sp_refresh_presentation`): `WHERE _IsCurrent = 1 AND _IsDeleted = 0` |
 | Fact Pattern | CurrentState MERGE or full rebuild |
 | Aggregate Pattern | Truncate + rebuild (`sp_refresh_aggregate`) |
-| Access Method | OneLake Shortcut registered in `wh_present` |
+| Access Method | OneLake Shortcuts hosted in `lh_bridge` (a Lakehouse); `wh_present` reads them by same-workspace three-part naming |
 | Future Upgrade | Change LoadPattern from `CurrentState` to `SCD2` in metadata → automated |
 
 ---
@@ -824,9 +820,9 @@ Error Handling: TRY/CATCH with log and THROW
 | Property | Value |
 |---|---|
 | Artifact | Warehouse (`wh_meta`) |
-| Workspace | `ws-analytics-meta` |
+| Workspace | `ws-analytics-present` (co-located with `wh_present`) |
 | Schemas | `meta` (12 metadata tables), `audit` (LoadLog, RollbackSnapshot) |
-| Access | All Notebooks/SPs read via SQL Endpoint; Pipeline SP has write access |
+| Access | Stored procedures in `wh_present` use same-workspace three-part naming. Notebooks in other workspaces read via JDBC against the TDS endpoint — Spark SQL name resolution does not cross workspaces |
 
 ### Full T-SQL DDL
 
@@ -847,7 +843,7 @@ CREATE TABLE [meta].[ConnectorType] (
     DriverClass         VARCHAR(200)    NULL,
     ConnectionTemplate  VARCHAR(500)    NULL,
     IncrementalStrategy VARCHAR(50)     NULL,
-    CONSTRAINT PK_ConnectorType PRIMARY KEY NONCLUSTERED (ConnectorTypeID)
+    CONSTRAINT PK_ConnectorType PRIMARY KEY NONCLUSTERED (ConnectorTypeID) NOT ENFORCED
 );
 
 -- ----- 2. Source -----
@@ -859,7 +855,7 @@ CREATE TABLE [meta].[Source] (
     AuthMethod          VARCHAR(50)     NOT NULL,
     DefaultSchema       VARCHAR(100)    NULL,
     IsActive            BIT             NOT NULL DEFAULT 1,
-    CONSTRAINT PK_Source PRIMARY KEY NONCLUSTERED (SourceID)
+    CONSTRAINT PK_Source PRIMARY KEY NONCLUSTERED (SourceID) NOT ENFORCED
 );
 
 -- ----- 3. SourceObject -----
@@ -875,7 +871,7 @@ CREATE TABLE [meta].[SourceObject] (
     PrimaryKeyColumns   VARCHAR(500)    NOT NULL,
     SchemaDefinition    VARCHAR(MAX)    NULL,        -- JSON schema of source columns
     IsActive            BIT             NOT NULL DEFAULT 1,
-    CONSTRAINT PK_SourceObject PRIMARY KEY NONCLUSTERED (SourceObjectID)
+    CONSTRAINT PK_SourceObject PRIMARY KEY NONCLUSTERED (SourceObjectID) NOT ENFORCED
 );
 
 -- ----- 4. Target -----
@@ -884,7 +880,7 @@ CREATE TABLE [meta].[Target] (
     LayerName           VARCHAR(20)     NOT NULL,   -- L0, L1, L2
     TargetSchema        VARCHAR(100)    NOT NULL,
     ConnectionType      VARCHAR(50)     NOT NULL,   -- Lakehouse, Warehouse
-    CONSTRAINT PK_Target PRIMARY KEY NONCLUSTERED (TargetID)
+    CONSTRAINT PK_Target PRIMARY KEY NONCLUSTERED (TargetID) NOT ENFORCED
 );
 
 -- ----- 5. TargetObject -----
@@ -898,7 +894,7 @@ CREATE TABLE [meta].[TargetObject] (
     PartitionColumn     VARCHAR(100)    NULL,
     RollbackStrategy    VARCHAR(50)     NULL,        -- DeltaTimeTravel, Reprocess
     IsActive            BIT             NOT NULL DEFAULT 1,
-    CONSTRAINT PK_TargetObject PRIMARY KEY NONCLUSTERED (TargetObjectID)
+    CONSTRAINT PK_TargetObject PRIMARY KEY NONCLUSTERED (TargetObjectID) NOT ENFORCED
 );
 
 -- ----- 6. Mapping -----
@@ -912,7 +908,7 @@ CREATE TABLE [meta].[Mapping] (
     OrdinalPosition     INT             NOT NULL,
     IsSCDTracked        BIT             NOT NULL DEFAULT 0,
     IsActive            BIT             NOT NULL DEFAULT 1,
-    CONSTRAINT PK_Mapping PRIMARY KEY NONCLUSTERED (MappingID)
+    CONSTRAINT PK_Mapping PRIMARY KEY NONCLUSTERED (MappingID) NOT ENFORCED
 );
 
 -- ----- 7. TransformationRule -----
@@ -923,7 +919,7 @@ CREATE TABLE [meta].[TransformationRule] (
     RuleCode            VARCHAR(MAX)    NULL,
     Parameters          VARCHAR(500)    NULL,
     Description         VARCHAR(500)    NULL,
-    CONSTRAINT PK_TransformationRule PRIMARY KEY NONCLUSTERED (RuleID)
+    CONSTRAINT PK_TransformationRule PRIMARY KEY NONCLUSTERED (RuleID) NOT ENFORCED
 );
 
 -- ----- 8. Pipeline -----
@@ -935,7 +931,7 @@ CREATE TABLE [meta].[Pipeline] (
     DependsOnPipelineIDs VARCHAR(200)   NULL,
     ErrorHandling       VARCHAR(50)     NOT NULL DEFAULT 'StopOnError',
     IsActive            BIT             NOT NULL DEFAULT 1,
-    CONSTRAINT PK_Pipeline PRIMARY KEY NONCLUSTERED (PipelineID)
+    CONSTRAINT PK_Pipeline PRIMARY KEY NONCLUSTERED (PipelineID) NOT ENFORCED
 );
 
 -- ----- 9. PipelineStep -----
@@ -948,7 +944,7 @@ CREATE TABLE [meta].[PipelineStep] (
     TargetObjectID      INT             NULL,
     LoadPattern         VARCHAR(50)     NULL,
     IsParallelisable    BIT             NOT NULL DEFAULT 0,
-    CONSTRAINT PK_PipelineStep PRIMARY KEY NONCLUSTERED (StepID)
+    CONSTRAINT PK_PipelineStep PRIMARY KEY NONCLUSTERED (StepID) NOT ENFORCED
 );
 
 -- ----- 10. QualityRule -----
@@ -959,7 +955,7 @@ CREATE TABLE [meta].[QualityRule] (
     RuleType            VARCHAR(50)     NOT NULL,   -- NotNull, Unique, Range, FK, RowCount
     RuleExpression      VARCHAR(MAX)    NOT NULL,
     Severity            VARCHAR(20)     NOT NULL,   -- Warn, Fail, Rollback
-    CONSTRAINT PK_QualityRule PRIMARY KEY NONCLUSTERED (QualityRuleID)
+    CONSTRAINT PK_QualityRule PRIMARY KEY NONCLUSTERED (QualityRuleID) NOT ENFORCED
 );
 
 -- ----- 11. LoadLog (Audit) -----
@@ -984,12 +980,9 @@ CREATE TABLE [audit].[LoadLog] (
     SnapshotID          BIGINT          NULL,
     ExecutionContext     VARCHAR(MAX)    NULL,
     Operator            VARCHAR(100)    NULL DEFAULT SYSTEM_USER,
-    CONSTRAINT PK_LoadLog PRIMARY KEY NONCLUSTERED (LogID)
+    CONSTRAINT PK_LoadLog PRIMARY KEY NONCLUSTERED (LogID) NOT ENFORCED
 );
 
-CREATE INDEX IX_LoadLog_BatchID ON [audit].[LoadLog] (BatchID);
-CREATE INDEX IX_LoadLog_PipelineID ON [audit].[LoadLog] (PipelineID);
-CREATE INDEX IX_LoadLog_Status ON [audit].[LoadLog] (Status);
 
 -- ----- 12. RollbackSnapshot (Audit) -----
 CREATE TABLE [audit].[RollbackSnapshot] (
@@ -1000,10 +993,9 @@ CREATE TABLE [audit].[RollbackSnapshot] (
     SnapshotType        VARCHAR(50)     NOT NULL DEFAULT 'DeltaVersion',
     SnapshotLocation    VARCHAR(500)    NOT NULL,   -- Delta version number or path
     Status              VARCHAR(20)     NOT NULL DEFAULT 'Active',  -- Active, Applied, Expired
-    CONSTRAINT PK_RollbackSnapshot PRIMARY KEY NONCLUSTERED (SnapshotID)
+    CONSTRAINT PK_RollbackSnapshot PRIMARY KEY NONCLUSTERED (SnapshotID) NOT ENFORCED
 );
 
-CREATE INDEX IX_RollbackSnapshot_BatchID ON [audit].[RollbackSnapshot] (BatchID, TargetObjectID);
 GO
 ```
 
@@ -1276,7 +1268,7 @@ ALTER TABLE lh_persist.dim_customer SET TBLPROPERTIES (
 | Notebook | `nb_{action}_{target}` | `nb_ingest_generic`, `nb_scd2_merge` |
 | Stored Procedure | `sp_{action}_{target}` | `sp_refresh_presentation` |
 | Data Pipeline | `pl_{scope}_{action}` | `pl_main_orchestrator` |
-| Shortcut | `shortcut_{source_lakehouse}` | `shortcut_lh_persist` |
+| Shortcut | `shortcut_{source_lakehouse}` | `lh_bridge` |
 
 ### Table Naming
 

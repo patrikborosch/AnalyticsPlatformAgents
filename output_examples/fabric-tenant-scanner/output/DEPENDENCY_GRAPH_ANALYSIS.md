@@ -18,90 +18,90 @@ graph TD
     classDef DataSource fill:#F5A623,stroke:#8B6914,stroke-width:2px,color:#fff
     classDef Empty fill:#E8E8E8,stroke:#999999,stroke-width:1px,color:#333
 
-    @000008["My workspace<br/>(0 models, 0 reports)"]:::Empty
-    @000027["Main<br/>(11 models, 5 reports)"]:::Workspace
-    @000007["StreamingDemo<br/>(1 models, 0 reports)"]:::Workspace
-    @000025["FUAM Capacity Metrics<br/>(1 models, 1 reports)"]:::Workspace
-    @000004["FUAM<br/>(5 models, 5 reports)"]:::Workspace
-    @000016["demoAgentCreatedWorkspace<br/>(1 models, 0 reports)"]:::Workspace
-    @000013["AnalyticsAgentsCreated-ws-analytics-landing<br/>(0 models, 0 reports)"]:::Empty
-    @000014["AnalyticsAgentsCreated-ws-analytics-persist<br/>(0 models, 0 reports)"]:::Empty
-    @000026["AnalyticsAgentsCreated-ws-analytics-meta<br/>(0 models, 0 reports)"]:::Empty
-    @000022["AnalyticsAgentsCreated-ws-analytics-present<br/>(0 models, 0 reports)"]:::Empty
+    ws_00000008["My workspace<br/>(0 models, 0 reports)"]:::Empty
+    ws_0000001a["Main<br/>(11 models, 5 reports)"]:::Workspace
+    ws_00000007["StreamingDemo<br/>(1 models, 0 reports)"]:::Workspace
+    ws_00000018["FUAM Capacity Metrics<br/>(1 models, 1 reports)"]:::Workspace
+    ws_00000004["FUAM<br/>(5 models, 5 reports)"]:::Workspace
+    ws_00000010["demoAgentCreatedWorkspace<br/>(1 models, 0 reports)"]:::Workspace
+    ws_0000000d["AnalyticsAgentsCreated-ws-analytics-landing<br/>(0 models, 0 reports)"]:::Empty
+    ws_0000000e["AnalyticsAgentsCreated-ws-analytics-persist<br/>(0 models, 0 reports)"]:::Empty
+    ws_00000019["AnalyticsAgentsCreated-ws-analytics-meta<br/>(0 models, 0 reports)"]:::Empty
+    ws_00000015["AnalyticsAgentsCreated-ws-analytics-present<br/>(0 models, 0 reports)"]:::Empty
 
-    @000041["DataflowsStagingWarehouse<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000027 --> @000041
-    @000032["EventHistoryDemo<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000027 --> @000032
-    @000035["SM_ExternalMirror<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000027 --> @000035
-    @000039["SM_ExternalMirror_Optimized<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000027 --> @000039
-    @000001["SwissRailwayVisitors<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000027 --> @000001
-    @000003["SM_SalesOverview<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000027 --> @000003
-    @000037["SM_CustomerAnalytics<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000027 --> @000037
-    @000029["SM_SupplierPerformance<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000027 --> @000029
-    @000036["SM_ExternalMirror_Consolidated<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000027 --> @000036
-    @000021["SM_GeographicSalesAnalysis<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000027 --> @000021
-    @000002["SM_ExternalMirror_Complete<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000027 --> @000002
-    @000019["NearRealtimeSemanticModel<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000007 --> @000019
-    @000038["Fabric Capacity Metrics<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000025 --> @000038
-    @000017["FUAM_Item_SM<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000004 --> @000017
-    @000015["FUAM_Core_SM<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000004 --> @000015
-    @000011["FUAM_Semantic_Model_Meta_Data_Analyzer_SM<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000004 --> @000011
-    @000028["FUAM_SQL_Endpoint_Analyzer_SM<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000004 --> @000028
-    @000023["FUAM_Gateway_Monitoring_From_Files_SM<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000004 --> @000023
-    @000033["OrderAnalytics<br/><sub>(Model)</sub>"]:::SemanticModel
-    @000016 --> @000033
+    m_00000027["DataflowsStagingWarehouse<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_0000001a --> m_00000027
+    m_0000001f["EventHistoryDemo<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_0000001a --> m_0000001f
+    m_00000022["SM_ExternalMirror<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_0000001a --> m_00000022
+    m_00000026["SM_ExternalMirror_Optimized<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_0000001a --> m_00000026
+    m_00000001["SwissRailwayVisitors<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_0000001a --> m_00000001
+    m_00000003["SM_SalesOverview<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_0000001a --> m_00000003
+    m_00000024["SM_CustomerAnalytics<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_0000001a --> m_00000024
+    m_0000001c["SM_SupplierPerformance<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_0000001a --> m_0000001c
+    m_00000023["SM_ExternalMirror_Consolidated<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_0000001a --> m_00000023
+    m_00000014["SM_GeographicSalesAnalysis<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_0000001a --> m_00000014
+    m_00000002["SM_ExternalMirror_Complete<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_0000001a --> m_00000002
+    m_00000012["NearRealtimeSemanticModel<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_00000007 --> m_00000012
+    m_00000025["Fabric Capacity Metrics<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_00000018 --> m_00000025
+    m_00000011["FUAM_Item_SM<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_00000004 --> m_00000011
+    m_0000000f["FUAM_Core_SM<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_00000004 --> m_0000000f
+    m_0000000b["FUAM_Semantic_Model_Meta_Data_Analyzer_SM<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_00000004 --> m_0000000b
+    m_0000001b["FUAM_SQL_Endpoint_Analyzer_SM<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_00000004 --> m_0000001b
+    m_00000016["FUAM_Gateway_Monitoring_From_Files_SM<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_00000004 --> m_00000016
+    m_00000020["OrderAnalytics<br/><sub>(Model)</sub>"]:::SemanticModel
+    ws_00000010 --> m_00000020
 
-    @000030["MyReportTest<br/><sub>(Report)</sub>"]:::Report
-    @000027 --> @000030
-    @000006["RefreshEveryMinute<br/><sub>(Report)</sub>"]:::Report
-    @000027 --> @000006
-    @000034["Rep_ExternalMirror<br/><sub>(Report)</sub>"]:::Report
-    @000027 --> @000034
-    @000042["SwissRailwayVisitors<br/><sub>(Report)</sub>"]:::Report
-    @000027 --> @000042
-    @000024["Rep_ExternalMirror_2<br/><sub>(Report)</sub>"]:::Report
-    @000027 --> @000024
-    @000012["Fabric Capacity Metrics<br/><sub>(Report)</sub>"]:::Report
-    @000025 --> @000012
-    @000010["FUAM_Item_Analyzer_Report<br/><sub>(Report)</sub>"]:::Report
-    @000004 --> @000010
-    @000020["FUAM_Core_Report<br/><sub>(Report)</sub>"]:::Report
-    @000004 --> @000020
-    @000005["FUAM_Semantic_Model_Meta_Data_Analyzer_Report<br/><sub>(Report)</sub>"]:::Report
-    @000004 --> @000005
-    @000009["FUAM_SQL_Endpoint_Analyzer_Report<br/><sub>(Report)</sub>"]:::Report
-    @000004 --> @000009
-    @000031["FUAM_Gateway_Monitoring_From_Files_Report<br/><sub>(Report)</sub>"]:::Report
-    @000004 --> @000031
+    r_0000001d["MyReportTest<br/><sub>(Report)</sub>"]:::Report
+    ws_0000001a --> r_0000001d
+    r_00000006["RefreshEveryMinute<br/><sub>(Report)</sub>"]:::Report
+    ws_0000001a --> r_00000006
+    r_00000021["Rep_ExternalMirror<br/><sub>(Report)</sub>"]:::Report
+    ws_0000001a --> r_00000021
+    r_00000028["SwissRailwayVisitors<br/><sub>(Report)</sub>"]:::Report
+    ws_0000001a --> r_00000028
+    r_00000017["Rep_ExternalMirror_2<br/><sub>(Report)</sub>"]:::Report
+    ws_0000001a --> r_00000017
+    r_0000000c["Fabric Capacity Metrics<br/><sub>(Report)</sub>"]:::Report
+    ws_00000018 --> r_0000000c
+    r_0000000a["FUAM_Item_Analyzer_Report<br/><sub>(Report)</sub>"]:::Report
+    ws_00000004 --> r_0000000a
+    r_00000013["FUAM_Core_Report<br/><sub>(Report)</sub>"]:::Report
+    ws_00000004 --> r_00000013
+    r_00000005["FUAM_Semantic_Model_Meta_Data_Analyzer_Report<br/><sub>(Report)</sub>"]:::Report
+    ws_00000004 --> r_00000005
+    r_00000009["FUAM_SQL_Endpoint_Analyzer_Report<br/><sub>(Report)</sub>"]:::Report
+    ws_00000004 --> r_00000009
+    r_0000001e["FUAM_Gateway_Monitoring_From_Files_Report<br/><sub>(Report)</sub>"]:::Report
+    ws_00000004 --> r_0000001e
 
-    @000041 -->|consumer| @000030
-    @000041 -->|consumer| @000006
-    @000041 -->|consumer| @000034
-    @000041 -->|consumer| @000042
-    @000041 -->|consumer| @000024
-    @000038 -->|consumer| @000012
-    @000017 -->|consumer| @000010
-    @000017 -->|consumer| @000020
-    @000017 -->|consumer| @000005
-    @000017 -->|consumer| @000009
-    @000017 -->|consumer| @000031
+    m_00000027 -->|consumer| r_0000001d
+    m_00000027 -->|consumer| r_00000006
+    m_00000027 -->|consumer| r_00000021
+    m_00000027 -->|consumer| r_00000028
+    m_00000027 -->|consumer| r_00000017
+    m_00000025 -->|consumer| r_0000000c
+    m_00000011 -->|consumer| r_0000000a
+    m_00000011 -->|consumer| r_00000013
+    m_00000011 -->|consumer| r_00000005
+    m_00000011 -->|consumer| r_00000009
+    m_00000011 -->|consumer| r_0000001e
 ```
 
 ---
