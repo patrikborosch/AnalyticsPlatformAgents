@@ -109,6 +109,9 @@ The cheapest gate. Run it **before** anything is deployed.
 | Capability legality | Does any specified access pattern rely on a capability the target platform does not have? |
 | Dependency ordering | Is the dependency graph acyclic, and does every load have its inputs produced before it runs? |
 | Traceability closure | Does every `AC-nnn` from the requirements have at least one executable assertion in the blueprint? |
+| **Threshold fidelity** | Does each bound assertion carry the **same threshold, tolerance, and severity** as the `AC` it enforces? A bound assertion with a relaxed number is worse than no assertion — it produces a green tick against a promise nobody kept |
+| **Assertion completeness** | Are all *structural* assertions implied by each table's pattern bound, per `.resources/kb-validation-assertions.md`? An SCD2 dimension binding only VA-S01 is incompletely checked |
+| **Constraint form** | Is every DDL construct expressed in a form the target engine accepts — not merely using legal keywords? (e.g. a constraint may be legal *and* illegal inline) |
 | Rollback coverage | Does every stateful load declare a rollback or restart path? |
 
 **Capability legality is the highest-value check here.** A blueprint can be perfectly self-consistent and still specify something the platform cannot do. These failures are expensive to find after deployment and nearly free to find here. Consult `.resources/kb-fabric-patterns.md` and `.resources/kb-fabric-artifacts.md` for the capability boundaries, and check the blueprint's own capability-constraint list (`agents/modeler.md` §7.4) item by item.
@@ -122,6 +125,8 @@ Treat every **cross-boundary** access path as suspect until proven legal — cro
 - DDL using options the target engine rejects, or tuning properties that belong to a different vendor's runtime and do nothing here
 
 The last one deserves emphasis: a setting that is silently ignored is worse than one that errors. The blueprint claims an optimisation, the deployment reports success, and the behaviour never materialises. Nothing fails, so nothing gets investigated.
+
+**Threshold fidelity is the check most easily forgotten, and the most damaging to miss.** Confirming that every `AC` has an assertion proves only that *something* is checked — not that the right thing is. If the requirements demand agreement within 0.05% and the blueprint binds an assertion at 0.5%, every gate goes green while the business promise is quietly broken by a factor of ten. Compare each bound threshold against its `AC` **character by character**, not by impression. A relaxed threshold is a requirements change, and requirements change only by recorded business decision — never by a modelling shortcut.
 
 ### G1 — Existence
 
