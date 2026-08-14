@@ -138,7 +138,7 @@ This prevents accidental commits of sensitive data (workspace IDs, subscription 
 
 **Example Data Policy:** All examples use synthetic identifiers and fictional names only. Never commit real tenant, workspace, or customer identifiers, credentials, tokens, or local user paths.
 
-`.github/workflows/tenant-data-scan.yml` enforces this on every push and pull request.
+`.github/workflows/tenant-data-scan.yml` enforces the GUID, credential, token, and local-path rules on every push and pull request. Identifying *names* cannot be detected automatically and remain a review responsibility.
 
 ## Creator Skills (from skills-for-fabric)
 

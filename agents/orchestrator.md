@@ -159,14 +159,14 @@ Fabric agents use specialised skills (in `creator/skills/`) and shared knowledge
 
 **Output:** `output/validation-report.md`, `output/validation-ledger.md`
 
-**Outcome handling:**
+**Outcome handling** — `@validator` evaluates these in order and reports exactly one:
 
 | Outcome | Action |
 |---|---|
-| `VALIDATED` | Workflow complete. Report to the user with the evidence index |
+| `FAILED` | Any `Must` assertion failed. Route each failure package to its owning agent and re-enter the loop |
+| `NOT VALIDATED` | Nothing failed, but `Must` criteria could not be checked. **Stop.** Report which criteria are unproven and why the evidence could not be obtained. Do **not** present this as success |
 | `VALIDATED WITH WARNINGS` | Complete. Present the failed `Should` criteria and let the user decide |
-| `FAILED` | Route each failure package to its owning agent and re-enter the loop |
-| `NOT VALIDATED` | Stop. Report which criteria are unproven and why the evidence could not be obtained. Do **not** present this as success |
+| `VALIDATED` | Workflow complete. Report to the user with the evidence index |
 
 ---
 

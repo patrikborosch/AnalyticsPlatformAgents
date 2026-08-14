@@ -69,12 +69,12 @@ Diagnose before routing. Misrouting is the most expensive failure mode in the lo
 
 Write `output/validation-report.md` and update `output/validation-ledger.md`.
 
-**Outcome:**
+**Outcome** — evaluated in order, first match wins:
 
-- `VALIDATED` — every `Must` passed, none skipped
-- `VALIDATED WITH WARNINGS` — every `Must` passed, some `Should` failed
-- `FAILED` — any `Must` failed
-- `NOT VALIDATED` — any `Must` is skipped or blocked. Unproven, which is neither success nor failure and must not be reported as either
+1. `FAILED` — any `Must` FAILED (takes precedence over downstream BLOCKED assertions)
+2. `NOT VALIDATED` — no `Must` FAILED, but one or more is SKIPPED or BLOCKED. Unproven, which is neither success nor failure and must not be reported as either
+3. `VALIDATED WITH WARNINGS` — every `Must` passed, some `Should` failed
+4. `VALIDATED` — every `Must` passed, none skipped
 
 **Stopping rules:** three attempts per assertion, then escalate. Identical actual value twice → stop immediately, the fix is not landing. Always re-run the full `Must` set after a repair, never only the failures.
 
