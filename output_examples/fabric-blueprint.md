@@ -213,7 +213,8 @@ COMMENT 'L0 Landing — bit-exact copy from {source_system}.{source_object}'
 
 ```
 delta.parquet.vorder.enabled = true
--- delta.autoOptimize.* are Databricks-only and have no effect in Fabric
+delta.autoOptimize.optimizeWrite = true
+delta.autoOptimize.autoCompact = true
 delta.logRetentionDuration = 30 days
 delta.deletedFileRetentionDuration = 30 days
 ```
@@ -335,7 +336,8 @@ COMMENT 'L1 Persistence — SCD2 dimension with full history'
 
 ```
 delta.parquet.vorder.enabled = true
--- delta.autoOptimize.* are Databricks-only and have no effect in Fabric
+delta.autoOptimize.optimizeWrite = true
+delta.autoOptimize.autoCompact = true
 delta.logRetentionDuration = 30 days
 delta.deletedFileRetentionDuration = 30 days
 ```
@@ -618,10 +620,11 @@ CREATE TABLE [present].[dim_customer] (
     Category                VARCHAR(100)    NULL,
     CustomerEmail           VARCHAR(200)    NULL,
     CustomerStatus          VARCHAR(20)     NULL,
-    _LastRefreshTimestamp    DATETIME2(3)    NOT NULL,
-
-    CONSTRAINT PK_dim_customer PRIMARY KEY NONCLUSTERED (SK_Customer) NOT ENFORCED
+    _LastRefreshTimestamp    DATETIME2(3)    NOT NULL
 );
+
+ALTER TABLE [present].[dim_customer]
+    ADD CONSTRAINT PK_dim_customer PRIMARY KEY NONCLUSTERED (SK_Customer) NOT ENFORCED;
 
 GO
 ```
@@ -638,10 +641,11 @@ CREATE TABLE [present].[fact_sales] (
     M_SalesAmount           DECIMAL(18,2)   NULL,
     M_Quantity              INT             NULL,
     M_Discount              DECIMAL(5,2)    NULL,
-    _LastRefreshTimestamp    DATETIME2(3)    NOT NULL,
-
-    CONSTRAINT PK_fact_sales PRIMARY KEY NONCLUSTERED (SK_Sales) NOT ENFORCED
+    _LastRefreshTimestamp    DATETIME2(3)    NOT NULL
 );
+
+ALTER TABLE [present].[fact_sales]
+    ADD CONSTRAINT PK_fact_sales PRIMARY KEY NONCLUSTERED (SK_Sales) NOT ENFORCED;
 
 GO
 ```
@@ -656,10 +660,11 @@ CREATE TABLE [present].[agg_sales_monthly] (
     M_TotalSalesAmount      DECIMAL(18,2)   NULL,
     M_TotalQuantity         INT             NULL,
     M_TransactionCount      INT             NULL,
-    _LastRefreshTimestamp    DATETIME2(3)    NOT NULL,
-
-    CONSTRAINT PK_agg_sales_monthly PRIMARY KEY NONCLUSTERED (FK_Customer, FK_Product, YearMonth) NOT ENFORCED
+    _LastRefreshTimestamp    DATETIME2(3)    NOT NULL
 );
+
+ALTER TABLE [present].[agg_sales_monthly]
+    ADD CONSTRAINT PK_agg_sales_monthly PRIMARY KEY NONCLUSTERED (FK_Customer, FK_Product, YearMonth) NOT ENFORCED;
 GO
 ```
 
@@ -842,9 +847,11 @@ CREATE TABLE [meta].[ConnectorType] (
     ConnectorName       VARCHAR(50)     NOT NULL,
     DriverClass         VARCHAR(200)    NULL,
     ConnectionTemplate  VARCHAR(500)    NULL,
-    IncrementalStrategy VARCHAR(50)     NULL,
-    CONSTRAINT PK_ConnectorType PRIMARY KEY NONCLUSTERED (ConnectorTypeID) NOT ENFORCED
+    IncrementalStrategy VARCHAR(50)     NULL
 );
+
+ALTER TABLE [meta].[ConnectorType]
+    ADD CONSTRAINT PK_ConnectorType PRIMARY KEY NONCLUSTERED (ConnectorTypeID) NOT ENFORCED;
 
 -- ----- 2. Source -----
 CREATE TABLE [meta].[Source] (
@@ -854,9 +861,11 @@ CREATE TABLE [meta].[Source] (
     ConnectionString    VARCHAR(500)    NOT NULL,
     AuthMethod          VARCHAR(50)     NOT NULL,
     DefaultSchema       VARCHAR(100)    NULL,
-    IsActive            BIT             NOT NULL DEFAULT 1,
-    CONSTRAINT PK_Source PRIMARY KEY NONCLUSTERED (SourceID) NOT ENFORCED
+    IsActive            BIT             NOT NULL DEFAULT 1
 );
+
+ALTER TABLE [meta].[Source]
+    ADD CONSTRAINT PK_Source PRIMARY KEY NONCLUSTERED (SourceID) NOT ENFORCED;
 
 -- ----- 3. SourceObject -----
 CREATE TABLE [meta].[SourceObject] (
@@ -870,9 +879,11 @@ CREATE TABLE [meta].[SourceObject] (
     WatermarkValue      DATETIME2(3)    NULL,
     PrimaryKeyColumns   VARCHAR(500)    NOT NULL,
     SchemaDefinition    VARCHAR(MAX)    NULL,        -- JSON schema of source columns
-    IsActive            BIT             NOT NULL DEFAULT 1,
-    CONSTRAINT PK_SourceObject PRIMARY KEY NONCLUSTERED (SourceObjectID) NOT ENFORCED
+    IsActive            BIT             NOT NULL DEFAULT 1
 );
+
+ALTER TABLE [meta].[SourceObject]
+    ADD CONSTRAINT PK_SourceObject PRIMARY KEY NONCLUSTERED (SourceObjectID) NOT ENFORCED;
 
 -- ----- 4. Target -----
 CREATE TABLE [meta].[Target] (
@@ -880,8 +891,10 @@ CREATE TABLE [meta].[Target] (
     LayerName           VARCHAR(20)     NOT NULL,   -- L0, L1, L2
     TargetSchema        VARCHAR(100)    NOT NULL,
     ConnectionType      VARCHAR(50)     NOT NULL,   -- Lakehouse, Warehouse
-    CONSTRAINT PK_Target PRIMARY KEY NONCLUSTERED (TargetID) NOT ENFORCED
 );
+
+ALTER TABLE [meta].[Target]
+    ADD CONSTRAINT PK_Target PRIMARY KEY NONCLUSTERED (TargetID) NOT ENFORCED;
 
 -- ----- 5. TargetObject -----
 CREATE TABLE [meta].[TargetObject] (
@@ -893,9 +906,11 @@ CREATE TABLE [meta].[TargetObject] (
     BusinessKeyColumns  VARCHAR(500)    NULL,
     PartitionColumn     VARCHAR(100)    NULL,
     RollbackStrategy    VARCHAR(50)     NULL,        -- DeltaTimeTravel, Reprocess
-    IsActive            BIT             NOT NULL DEFAULT 1,
-    CONSTRAINT PK_TargetObject PRIMARY KEY NONCLUSTERED (TargetObjectID) NOT ENFORCED
+    IsActive            BIT             NOT NULL DEFAULT 1
 );
+
+ALTER TABLE [meta].[TargetObject]
+    ADD CONSTRAINT PK_TargetObject PRIMARY KEY NONCLUSTERED (TargetObjectID) NOT ENFORCED;
 
 -- ----- 6. Mapping -----
 CREATE TABLE [meta].[Mapping] (
@@ -907,9 +922,11 @@ CREATE TABLE [meta].[Mapping] (
     TransformationRuleID INT           NULL,
     OrdinalPosition     INT             NOT NULL,
     IsSCDTracked        BIT             NOT NULL DEFAULT 0,
-    IsActive            BIT             NOT NULL DEFAULT 1,
-    CONSTRAINT PK_Mapping PRIMARY KEY NONCLUSTERED (MappingID) NOT ENFORCED
+    IsActive            BIT             NOT NULL DEFAULT 1
 );
+
+ALTER TABLE [meta].[Mapping]
+    ADD CONSTRAINT PK_Mapping PRIMARY KEY NONCLUSTERED (MappingID) NOT ENFORCED;
 
 -- ----- 7. TransformationRule -----
 CREATE TABLE [meta].[TransformationRule] (
@@ -918,9 +935,11 @@ CREATE TABLE [meta].[TransformationRule] (
     RuleType            VARCHAR(50)     NOT NULL,   -- DirectCopy, SQL, Expression, Lookup, HashKey, Conditional, SurrogateKey
     RuleCode            VARCHAR(MAX)    NULL,
     Parameters          VARCHAR(500)    NULL,
-    Description         VARCHAR(500)    NULL,
-    CONSTRAINT PK_TransformationRule PRIMARY KEY NONCLUSTERED (RuleID) NOT ENFORCED
+    Description         VARCHAR(500)    NULL
 );
+
+ALTER TABLE [meta].[TransformationRule]
+    ADD CONSTRAINT PK_TransformationRule PRIMARY KEY NONCLUSTERED (RuleID) NOT ENFORCED;
 
 -- ----- 8. Pipeline -----
 CREATE TABLE [meta].[Pipeline] (
@@ -930,9 +949,11 @@ CREATE TABLE [meta].[Pipeline] (
     ScheduleCron        VARCHAR(50)     NULL,
     DependsOnPipelineIDs VARCHAR(200)   NULL,
     ErrorHandling       VARCHAR(50)     NOT NULL DEFAULT 'StopOnError',
-    IsActive            BIT             NOT NULL DEFAULT 1,
-    CONSTRAINT PK_Pipeline PRIMARY KEY NONCLUSTERED (PipelineID) NOT ENFORCED
+    IsActive            BIT             NOT NULL DEFAULT 1
 );
+
+ALTER TABLE [meta].[Pipeline]
+    ADD CONSTRAINT PK_Pipeline PRIMARY KEY NONCLUSTERED (PipelineID) NOT ENFORCED;
 
 -- ----- 9. PipelineStep -----
 CREATE TABLE [meta].[PipelineStep] (
@@ -943,9 +964,11 @@ CREATE TABLE [meta].[PipelineStep] (
     SourceObjectID      INT             NULL,
     TargetObjectID      INT             NULL,
     LoadPattern         VARCHAR(50)     NULL,
-    IsParallelisable    BIT             NOT NULL DEFAULT 0,
-    CONSTRAINT PK_PipelineStep PRIMARY KEY NONCLUSTERED (StepID) NOT ENFORCED
+    IsParallelisable    BIT             NOT NULL DEFAULT 0
 );
+
+ALTER TABLE [meta].[PipelineStep]
+    ADD CONSTRAINT PK_PipelineStep PRIMARY KEY NONCLUSTERED (StepID) NOT ENFORCED;
 
 -- ----- 10. QualityRule -----
 CREATE TABLE [meta].[QualityRule] (
@@ -955,8 +978,10 @@ CREATE TABLE [meta].[QualityRule] (
     RuleType            VARCHAR(50)     NOT NULL,   -- NotNull, Unique, Range, FK, RowCount
     RuleExpression      VARCHAR(MAX)    NOT NULL,
     Severity            VARCHAR(20)     NOT NULL,   -- Warn, Fail, Rollback
-    CONSTRAINT PK_QualityRule PRIMARY KEY NONCLUSTERED (QualityRuleID) NOT ENFORCED
 );
+
+ALTER TABLE [meta].[QualityRule]
+    ADD CONSTRAINT PK_QualityRule PRIMARY KEY NONCLUSTERED (QualityRuleID) NOT ENFORCED;
 
 -- ----- 11. LoadLog (Audit) -----
 CREATE TABLE [audit].[LoadLog] (
@@ -979,9 +1004,11 @@ CREATE TABLE [audit].[LoadLog] (
     QualityRuleName     VARCHAR(200)    NULL,
     SnapshotID          BIGINT          NULL,
     ExecutionContext     VARCHAR(MAX)    NULL,
-    Operator            VARCHAR(100)    NULL DEFAULT SYSTEM_USER,
-    CONSTRAINT PK_LoadLog PRIMARY KEY NONCLUSTERED (LogID) NOT ENFORCED
+    Operator            VARCHAR(100)    NULL DEFAULT SYSTEM_USER
 );
+
+ALTER TABLE [audit].[LoadLog]
+    ADD CONSTRAINT PK_LoadLog PRIMARY KEY NONCLUSTERED (LogID) NOT ENFORCED;
 
 
 -- ----- 12. RollbackSnapshot (Audit) -----
@@ -993,8 +1020,10 @@ CREATE TABLE [audit].[RollbackSnapshot] (
     SnapshotType        VARCHAR(50)     NOT NULL DEFAULT 'DeltaVersion',
     SnapshotLocation    VARCHAR(500)    NOT NULL,   -- Delta version number or path
     Status              VARCHAR(20)     NOT NULL DEFAULT 'Active',  -- Active, Applied, Expired
-    CONSTRAINT PK_RollbackSnapshot PRIMARY KEY NONCLUSTERED (SnapshotID) NOT ENFORCED
 );
+
+ALTER TABLE [audit].[RollbackSnapshot]
+    ADD CONSTRAINT PK_RollbackSnapshot PRIMARY KEY NONCLUSTERED (SnapshotID) NOT ENFORCED;
 
 GO
 ```
@@ -1268,7 +1297,8 @@ ALTER TABLE lh_persist.dim_customer SET TBLPROPERTIES (
 | Notebook | `nb_{action}_{target}` | `nb_ingest_generic`, `nb_scd2_merge` |
 | Stored Procedure | `sp_{action}_{target}` | `sp_refresh_presentation` |
 | Data Pipeline | `pl_{scope}_{action}` | `pl_main_orchestrator` |
-| Shortcut | `shortcut_{source_lakehouse}` | `lh_bridge` |
+| Shortcut | `{source_table_name}` | `dim_customer` (shortcut inside `lh_bridge` pointing at `lh_persist.dim_customer`) |
+| Bridge Lakehouse | `lh_bridge` | `lh_bridge` — hosts cross-workspace shortcuts in the consuming workspace |
 
 ### Table Naming
 

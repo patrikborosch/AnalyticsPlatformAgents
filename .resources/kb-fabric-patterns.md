@@ -267,26 +267,26 @@ pl_main_orchestrator
 
 `spark.sql("SELECT ... FROM wh_meta.meta.Mapping")` and `spark.read.table("wh_meta.meta.Mapping")` resolve names through the Spark metastore, which is **workspace-scoped**. If `wh_meta` lives in a different workspace from the notebook, these raise `AnalysisException: Table or view not found`.
 
-The only supported Spark path to a cross-workspace Warehouse is JDBC against its TDS endpoint:
+Use the **Spark connector for Fabric Data Warehouse**, which is preinstalled in the runtime and supports cross-workspace reads:
 
 ```python
-wh_meta_jdbc = "jdbc:sqlserver://<workspace-endpoint>.datawarehouse.fabric.microsoft.com:1433"
+from com.microsoft.spark.fabric.Constants import Constants
 
-def read_meta(query):
-    return (spark.read.format("jdbc")
-        .option("url", wh_meta_jdbc)
-        .option("databaseName", "wh_meta")
-        .option("query", query)
-        .option("authentication", "ActiveDirectoryServicePrincipal")
-        .option("encrypt", "true")
-        .load())
+mappings = (spark.read
+    .option(Constants.WorkspaceId, "<wh_meta_workspace_id>")
+    .synapsesql("wh_meta.meta.Mapping"))
 
-mappings = read_meta("SELECT * FROM [meta].[Mapping] WHERE TargetObjectID = 42")
+# Custom query variant
+rules = (spark.read
+    .option(Constants.DatabaseName, "wh_meta")
+    .synapsesql("SELECT * FROM meta.TransformationRule WHERE IsActive = 1"))
 ```
 
-**Prefer co-location.** If `wh_meta` sits in the same workspace as the notebook's Lakehouse, plain Spark SQL works and every JDBC block above disappears. Separate workspaces are a governance decision that costs real implementation complexity — take it deliberately, not by default.
+The connector honours object-, row-, and column-level security defined in the SQL engine.
 
-For simple lookups, a **Pipeline Lookup Activity** reading the metadata and passing values as notebook parameters is usually cleaner than embedding JDBC in every notebook.
+**Authentication constraint:** it supports **interactive Microsoft Entra user authentication only — service principals are not supported.** For scheduled, unattended pipeline runs, read the metadata with a **Pipeline Lookup Activity** and pass the values into the notebook as parameters instead.
+
+**Prefer co-location.** If `wh_meta` sits in the same workspace as the notebook's Lakehouse, plain `spark.read.table(...)` works and all of the above disappears. Separate workspaces are a governance decision that costs real implementation complexity — take it deliberately, not by default.
 
 ## Pattern 5: Cross-Workspace Access — Bridge Lakehouse
 
@@ -329,21 +329,22 @@ WHERE _IsCurrent = 1
 
 ```python
 # Set at table creation or via ALTER TABLE.
-# NOTE: delta.autoOptimize.optimizeWrite and delta.autoOptimize.autoCompact are
-#       Databricks-only properties. They are accepted silently but do NOTHING in
-#       Fabric — do not rely on them.
 spark.sql("""
     ALTER TABLE dim_customer SET TBLPROPERTIES (
         'delta.parquet.vorder.enabled' = 'true',
+        'delta.autoOptimize.optimizeWrite' = 'true',
+        'delta.autoOptimize.autoCompact' = 'true',
         'delta.logRetentionDuration' = 'interval 30 days',
         'delta.deletedFileRetentionDuration' = 'interval 30 days'
     )
 """)
 
-# Compaction and data skipping are explicit maintenance operations in Fabric,
-# not write-time behaviour. Schedule them.
+# Auto compaction runs a synchronous OPTIMIZE after a fragmenting write. Scheduled
+# OPTIMIZE is still worthwhile for Z-Order, which auto compaction does not apply.
 spark.sql("OPTIMIZE dim_customer ZORDER BY (BK_Customer)")
 ```
+
+> **V-Order is disabled by default** in new Fabric workspaces (favouring write-heavy pipelines). Enable it deliberately on read-heavy tables. Equivalent session configs: `spark.databricks.delta.optimizeWrite.enabled`, `spark.databricks.delta.autoCompact.enabled`, `spark.sql.parquet.vorder.default`.
 
 ### Partition Strategy
 

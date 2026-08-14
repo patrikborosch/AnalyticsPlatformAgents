@@ -74,13 +74,13 @@ Fabric agents (`@FabricDataEngineer`, `@FabricAdmin`, `@FabricAppDev`) reference
 Never commit, in any tracked file:
 
 - **Real tenant, capacity, workspace, or artifact GUIDs.** Replace with synthetic placeholders of the form `00000000-0000-4000-8000-0000000000NN`
-- **Real workspace, model, or report names** that reveal internal projects or identify a person
+- **Names that identify a person, a customer, or a live engagement.** Neutral demo names (`StreamingDemo`, `dim_customer`) are fine; a colleague's or client's name is not
 - Credentials, connection strings with embedded secrets, bearer tokens, or JWTs
 - Local user paths (`C:\Users\<name>`, `/home/<name>`, `OneDrive - …`)
 
 When promoting a real run's output into `output_examples/`, replace every identifier before committing. The structure is what makes an example useful; the actual IDs never are.
 
-`.github/workflows/tenant-data-scan.yml` enforces this on every push and pull request.
+`.github/workflows/tenant-data-scan.yml` enforces the **GUID, credential, token, and local-path** rules automatically on every push and pull request. It cannot detect an identifying *name* — that check remains a human responsibility.
 
 ### Naming Conventions
 

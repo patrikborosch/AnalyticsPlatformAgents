@@ -165,12 +165,12 @@ Verdicts are binary. There is no partial credit.
 | `BLOCKED` | The assertion could not execute because an earlier gate failed |
 | `SKIPPED` | The active evidence provider cannot supply the evidence. Never a substitute for PASS |
 
-**Overall run outcome:**
+**Overall run outcome** — evaluate in this order; the first match wins, so exactly one outcome always applies:
 
-- **VALIDATED** — every `Must` assertion PASSED; no `Must` assertion is SKIPPED
-- **VALIDATED WITH WARNINGS** — every `Must` PASSED; one or more `Should` FAILED
-- **FAILED** — any `Must` assertion FAILED
-- **NOT VALIDATED** — any `Must` assertion is SKIPPED or BLOCKED. The platform is not proven broken; it is unproven, which is a different and equally unacceptable state
+1. **FAILED** — at least one `Must` assertion FAILED. This takes precedence regardless of how many assertions were BLOCKED downstream, because gates short-circuit and a genuine failure almost always blocks the gates below it
+2. **NOT VALIDATED** — no `Must` assertion FAILED, but at least one is SKIPPED or BLOCKED. The platform is not proven broken; it is unproven, which is a different and equally unacceptable state
+3. **VALIDATED WITH WARNINGS** — every `Must` PASSED; one or more `Should` FAILED
+4. **VALIDATED** — every `Must` PASSED and none were skipped or blocked
 
 Never report an aggregate score. "84% of checks passed" hides which 16% failed and invites someone to ship anyway.
 

@@ -73,7 +73,8 @@ You must know every Fabric artifact type and when to use each.
 | Artifact | Engine | Format | Best For |
 |---|---|---|---|
 | **Lakehouse** | Spark (PySpark/SparkSQL) | Delta Lake (Parquet + transaction log) | L0 Landing, L1 Persistence — flexible schema, large-scale transforms, SCD2, file ingestion |
-| **Warehouse** | T-SQL (dedicated SQL engine) | Delta Lake (managed by SQL engine) | L2 Presentation — structured star schemas, SQL-based consumers, stored procedures, views || **Eventhouse** | KQL (Kusto Query Language) | Kusto-optimised columnar | L4 Real-Time — streaming ingestion, time-series, log analytics, hot data |
+| **Warehouse** | T-SQL (dedicated SQL engine) | Delta Lake (managed by SQL engine) | L2 Presentation — structured star schemas, SQL-based consumers, stored procedures, views |
+| **Eventhouse** | KQL (Kusto Query Language) | Kusto-optimised columnar | L4 Real-Time — streaming ingestion, time-series, log analytics, hot data |
 | **KQL Database** | KQL | Kusto-optimised columnar | Individual database within an Eventhouse (one per domain or use case) |
 
 #### Decision Matrix — Which Storage for Which Layer
@@ -90,7 +91,7 @@ You must know every Fabric artifact type and when to use each.
 
 > **The Lakehouse SQL analytics endpoint is read-only.** `CREATE`/`ALTER`/`DROP TABLE` and `INSERT`/`UPDATE`/`DELETE` work only in a Warehouse. Never design a path where a Warehouse stored procedure writes into a Lakehouse — model the write in Spark instead.
 >
-> **T-SQL surface limits (Warehouse):** no triggers, materialised views, synonyms, recursive queries, `SET TRANSACTION ISOLATION LEVEL`, `SELECT … FOR XML`, `SET ROWCOUNT`, `CREATE USER`, `BULK LOAD`, or manually created multi-column statistics. `MERGE`, session-scoped `#temp` tables, and `TRUNCATE TABLE` are supported. `IDENTITY` is in preview. Unsupported statements can *appear* to succeed while causing damage, so treat this list as a hard boundary rather than a set of preferences. Full list: <https://learn.microsoft.com/fabric/data-warehouse/tsql-surface-area>
+> **T-SQL surface limits (Warehouse):** no triggers, materialised views, synonyms, recursive queries, `SET TRANSACTION ISOLATION LEVEL`, `SELECT … FOR XML`, `SET ROWCOUNT`, `CREATE USER`, `BULK LOAD`, `CREATE INDEX`, `DEFAULT` constraints, or manually created multi-column statistics. `MERGE`, session-scoped `#temp` tables, and `TRUNCATE TABLE` are supported. `IDENTITY` is in preview. PK/UNIQUE/FK must be added via `ALTER TABLE` with `NOT ENFORCED` — never inline in `CREATE TABLE`. Unsupported statements can *appear* to succeed while causing damage, so treat this list as a hard boundary rather than a set of preferences. Full list: <https://learn.microsoft.com/fabric/data-warehouse/tsql-surface-area>
 
 ### 2.2 Processing Artifacts
 
@@ -260,10 +261,12 @@ Delta Properties:
   delta.logRetentionDuration = interval 30 days          -- retain log for time travel / rollback
   delta.deletedFileRetentionDuration = interval 30 days  -- retain files for time travel
   delta.parquet.vorder.enabled = true                    -- V-Order for read-heavy L1 tables
+  delta.autoOptimize.optimizeWrite = true                -- right-sized files at write time
+  delta.autoOptimize.autoCompact = true                  -- synchronous OPTIMIZE after a fragmenting write
   -- Run OPTIMIZE <table> ZORDER BY (BK_<Entity>) periodically as a maintenance job
-  -- NOTE: delta.autoOptimize.optimizeWrite / autoCompact are Databricks-only properties.
-  --       They have NO effect in Fabric and must not be specified.
 ```
+
+> **V-Order is disabled by default** in new Fabric workspaces, which favours write-heavy pipelines. Enable it deliberately on read-heavy L1/L2 tables rather than assuming it is on.
 
 ### 5.2 Warehouse Table (L2 / Metadata) — T-SQL DDL
 
@@ -273,15 +276,20 @@ CREATE TABLE [present].[dim_customer] (
     BK_Customer       VARCHAR(50)     NOT NULL,
     CustomerName      VARCHAR(200)    NULL,
     -- ... mapped attributes ...
-    _LastRefreshTimestamp DATETIME2(3) NOT NULL,
-
-    CONSTRAINT PK_dim_customer PRIMARY KEY NONCLUSTERED (SK_Customer) NOT ENFORCED
+    _LastRefreshTimestamp DATETIME2(3) NOT NULL
 );
+
+-- Constraints MUST be added afterwards. Fabric Warehouse does not accept
+-- PRIMARY KEY, UNIQUE, or FOREIGN KEY declared inline in CREATE TABLE.
+ALTER TABLE [present].[dim_customer]
+    ADD CONSTRAINT PK_dim_customer PRIMARY KEY NONCLUSTERED (SK_Customer) NOT ENFORCED;
 ```
 
-> **`NOT ENFORCED` is mandatory.** Fabric Warehouse supports PRIMARY KEY, UNIQUE, and FOREIGN KEY constraints *only* with the `NOT ENFORCED` option. Omitting it causes the statement to fail. Constraints are optimiser hints and documentation — never a uniqueness guarantee. Enforce uniqueness through validation assertions (§12.6), not through DDL.
+> **Two separate rules, both mandatory.** Constraints cannot be declared inline in `CREATE TABLE` — they must be added with `ALTER TABLE`. And `PRIMARY KEY`/`UNIQUE` require both `NONCLUSTERED` and `NOT ENFORCED`; `FOREIGN KEY` requires `NOT ENFORCED`. Getting only one of the two right still fails to deploy.
 >
-> Fabric Warehouse also does **not** support `CREATE INDEX`. Tables use clustered columnstore automatically; there are no user-defined nonclustered indexes to create.
+> Constraints are optimiser hints and documentation — never a uniqueness guarantee, because nothing enforces them. Enforce uniqueness through validation assertions (§12.6).
+>
+> Fabric Warehouse also does **not** support `CREATE INDEX` or `DEFAULT` constraints. Tables use clustered columnstore automatically; there are no user-defined nonclustered indexes to create.
 
 ### 5.3 Relationships
 
@@ -324,8 +332,9 @@ Logic Summary:
 
 Spark Configuration:
   spark.sql.shuffle.partitions = <recommended>
-  spark.sql.parquet.vorder.default = true   -- V-Order writes for read-heavy tables
-  -- NOTE: spark.databricks.delta.* settings are Databricks-only and have no effect in Fabric
+  spark.sql.parquet.vorder.default = true                    -- V-Order writes for read-heavy tables
+  spark.databricks.delta.optimizeWrite.enabled = true        -- right-sized files at write time
+  spark.databricks.delta.autoCompact.enabled = true          -- auto compaction for new tables
 
 Input Tables: <list of tables read>
 Output Tables: <list of tables written>
@@ -417,26 +426,26 @@ Windowing: Tumbling window (5 min) for aggregation, or no-window for raw append
 # PSEUDOCODE — @FabricDataEngineer implements as actual PySpark
 
 # 1. Read metadata from wh_meta.
-#    wh_meta is a Warehouse in a different workspace, so Spark SQL table resolution
-#    does NOT work here (see constraint C3). Use JDBC against the TDS endpoint.
-wh_meta_jdbc = "jdbc:sqlserver://<wh_meta_endpoint>.datawarehouse.fabric.microsoft.com:1433"
+#    Spark SQL table resolution does NOT cross workspaces (constraint C3), so use the
+#    built-in Spark connector for Fabric Data Warehouse, which is preinstalled in the
+#    runtime and handles cross-workspace reads via Entra passthrough.
+from com.microsoft.spark.fabric.Constants import Constants
 
-def read_meta(query):
-    return (spark.read.format("jdbc")
-        .option("url", wh_meta_jdbc)
-        .option("databaseName", "wh_meta")
-        .option("query", query)
-        .option("authentication", "ActiveDirectoryServicePrincipal")
-        .option("encrypt", "true")
-        .load())
+def read_meta(table):
+    return (spark.read
+        .option(Constants.WorkspaceId, "<wh_meta_workspace_id>")
+        .synapsesql(f"wh_meta.meta.{table}"))
 
-mappings = read_meta(
-    f"SELECT * FROM [meta].[Mapping] "
-    f"WHERE SourceObjectID = {source_object_id} AND TargetObjectID = {target_object_id}")
-rules = read_meta("SELECT * FROM [meta].[TransformationRule]")
+mappings = read_meta("Mapping").filter(
+    f"SourceObjectID = {source_object_id} AND TargetObjectID = {target_object_id}")
+rules = read_meta("TransformationRule")
 
-# If wh_meta is co-located in the same workspace as the notebook's Lakehouse,
-# spark.read.table("wh_meta.meta.Mapping") is valid and simpler — prefer that layout.
+# If wh_meta is co-located in the same workspace, spark.read.table("wh_meta.meta.Mapping")
+# works directly — prefer that layout.
+#
+# The connector supports interactive Entra user auth only, not service principals. For
+# unattended pipeline runs, read metadata with a Pipeline Lookup Activity and pass the
+# values in as notebook parameters instead.
 
 # 2. Read source (L0 batch)
 source_df = spark.read.table(f"lh_landing.raw_{source_object}") \
@@ -525,8 +534,8 @@ WHEN NOT MATCHED BY SOURCE THEN
 | L1 → L2 (same workspace) | Stored Procedure | Three-part naming: `[lh_persist].[dbo].[dim_customer]` resolves the Lakehouse SQL analytics endpoint |
 | L1 → L2 (**different workspace**) | Stored Procedure via bridge Lakehouse | Create `lh_bridge` in the L2 workspace, add OneLake Shortcuts pointing at `lh_persist`, then query `[lh_bridge].[dbo].[dim_customer]`. **Three-part naming cannot cross workspaces** |
 | L2 → Semantic | `@FabricDataEngineer` via `powerbi-authoring-cli` | Direct Lake on Warehouse tables |
-| Metadata → Notebook (cross-workspace) | JDBC | `spark.read.format("jdbc")` against the Warehouse TDS endpoint. Spark SQL table resolution does not cross workspaces |
-| Metadata → Pipeline | Lookup Activity | Read metadata rows before invoking a Notebook or Stored Procedure and pass them as parameters |
+| Metadata → Notebook (cross-workspace) | Spark connector for Fabric Data Warehouse | `spark.read.option(Constants.WorkspaceId, "<id>").synapsesql("wh_meta.meta.Mapping")`. Preinstalled in the runtime; uses Entra passthrough. **Interactive user auth only — no service principal**, so unattended pipeline runs need a different path |
+| Metadata → Pipeline | Lookup Activity | Read metadata rows before invoking a Notebook or Stored Procedure and pass them as parameters. The usual choice for scheduled, unattended runs |
 
 ---
 
@@ -538,10 +547,10 @@ These are hard platform limits. Violating one produces a blueprint that deploys 
 |---|---|---|
 | C1 | **Three-part naming is workspace-scoped.** Cross-database T-SQL works only between Warehouses and Lakehouse SQL analytics endpoints in the *same* workspace | Every cross-workspace query fails at runtime |
 | C2 | **Shortcuts live in Lakehouses and KQL databases only** — never inside a Warehouse. A Warehouse can be the *target* of a shortcut, not the host | The shortcut cannot be created; the design has no data path |
-| C3 | **Spark SQL name resolution does not cross workspaces.** `spark.read.table("wh_x.schema.tbl")` fails for a Warehouse in another workspace. Use JDBC against the TDS endpoint | `AnalysisException: Table or view not found` |
+| C3 | **Spark SQL name resolution does not cross workspaces.** `spark.read.table("wh_x.schema.tbl")` fails for a Warehouse in another workspace. Use the built-in Spark connector: `spark.read.option(Constants.WorkspaceId, "<id>").synapsesql("wh.schema.table")` | `AnalysisException: Table or view not found` |
 | C4 | **The SQL analytics endpoint of a Lakehouse is read-only.** A Warehouse stored procedure cannot write into a Lakehouse | Any write-back design is invalid |
-| C5 | **Warehouse constraints require `NOT ENFORCED`**, and `CREATE INDEX` is unsupported | DDL deployment fails |
-| C6 | **`delta.autoOptimize.*` is Databricks-only** and silently does nothing in Fabric | Expected optimisation never happens; nobody is told |
+| C5 | **Warehouse constraints cannot be declared inline** in `CREATE TABLE` — add them with `ALTER TABLE`, and `PRIMARY KEY`/`UNIQUE` need both `NONCLUSTERED` and `NOT ENFORCED`. `CREATE INDEX` and `DEFAULT` constraints are unsupported | DDL deployment fails |
+| C6 | **V-Order is off by default** in new workspaces, and `OPTIMIZE`/`VACUUM` are explicit maintenance operations | Read-heavy tables silently miss an optimisation the blueprint assumed |
 | C7 | **Direct Lake falls back to DirectQuery** when a model exceeds capacity guardrails or hits an unsupported query pattern, and requires framing after data changes | Unexplained performance cliffs and stale reports |
 | C8 | **Warehouse collation is fixed at creation.** The default is `Latin1_General_100_BIN2_UTF8` — **case-sensitive**. It cannot be changed afterwards | Key matching behaves differently than in a case-insensitive source; only fixable by recreating the warehouse |
 | C9 | **Unsupported T-SQL:** triggers, materialised views, synonyms, recursive queries, `SET TRANSACTION ISOLATION LEVEL`, `SELECT … FOR XML`, `SET ROWCOUNT`, `CREATE USER`, `BULK LOAD`, manually created multi-column statistics, queries targeting system and user tables together. `MERGE`, session-scoped `#temp` tables, and `TRUNCATE TABLE` **are** supported | These may appear to succeed while corrupting behaviour — the docs warn explicitly against attempting them |
@@ -604,9 +613,11 @@ CREATE TABLE [meta].[ConnectorType] (
     ConnectorName      VARCHAR(50)   NOT NULL,
     DriverClass        VARCHAR(200)  NULL,
     ConnectionTemplate VARCHAR(500)  NULL,
-    IncrementalStrategy VARCHAR(50)  NULL,
-    CONSTRAINT PK_ConnectorType PRIMARY KEY NONCLUSTERED (ConnectorTypeID) NOT ENFORCED
+    IncrementalStrategy VARCHAR(50)  NULL
 );
+
+ALTER TABLE [meta].[ConnectorType]
+    ADD CONSTRAINT PK_ConnectorType PRIMARY KEY NONCLUSTERED (ConnectorTypeID) NOT ENFORCED;
 
 -- ... (all 12 tables with full DDL)
 ```
@@ -614,8 +625,9 @@ CREATE TABLE [meta].[ConnectorType] (
 ### Cross-Workspace Access
 
 Notebooks in `ws-landing` and `ws-persist` read metadata from `wh_meta` via:
-- **JDBC** against the Warehouse's TDS SQL endpoint using `spark.read.format("jdbc")`. This is the only supported Spark access path to a Warehouse in another workspace — Spark SQL table resolution is workspace-scoped (constraint C3)
-- **Pipeline Lookup Activity** to read metadata before invoking the Notebook, passing values as parameters. Preferable for simple lookups, since it keeps JDBC boilerplate out of every notebook
+- **Spark connector for Fabric Data Warehouse** — `spark.read.option(Constants.WorkspaceId, "<id>").synapsesql("wh_meta.meta.Mapping")`. Preinstalled in the runtime, honours SQL-engine security (OLS/RLS/CLS), and works across workspaces. Note it supports **interactive Entra user authentication only — not service principals**
+- **Pipeline Lookup Activity** — read metadata rows before invoking the Notebook and pass them as parameters. The right choice for **scheduled, unattended runs**, since the Spark connector cannot authenticate as a service principal
+- Plain `spark.read.table("wh_meta.meta.X")` works **only** when `wh_meta` is in the same workspace (constraint C3)
 
 > **A stored procedure in `wh_present` cannot write audit rows into `wh_meta` in another workspace.** Three-part naming does not cross workspace boundaries (constraint C1), so `INSERT INTO [wh_meta].[audit].[LoadLog]` fails at runtime. Choose one:
 >

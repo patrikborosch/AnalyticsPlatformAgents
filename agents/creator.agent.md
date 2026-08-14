@@ -62,7 +62,7 @@ When invoked directly by the user (`@creator`), accept multi-agent creation requ
 
 ### Step 1 — Validate Blueprint
 
-Read `output/fabric-blueprint.md` and verify the Fabric Agent Handoff Checklist (§12.6):
+Read `output/fabric-blueprint.md` and verify the Validation Specifications (§12.6) and the Fabric Agent Handoff Checklist (§12.7):
 
 | Agent | Required Sections | Status |
 |---|---|---|

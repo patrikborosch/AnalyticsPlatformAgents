@@ -136,9 +136,9 @@ Run G0 before every deployment. It costs nothing, needs no tenant, and catches t
 
 This prevents accidental commits of sensitive data (workspace IDs, subscription IDs, tenant-specific configurations) and keeps the repository clean for public sharing.
 
-**Sanitisation Policy:** This repository is public. `output/` is gitignored, but `output_examples/` is deliberately tracked — and that boundary is where real tenant data can leak. Anything promoted into `output_examples/` must first have real tenant, capacity, workspace, and artifact GUIDs replaced with synthetic placeholders (`00000000-0000-4000-8000-0000000000NN`), and real workspace or model names replaced with neutral ones. Credentials, tokens, and local user paths are never committed.
+**Sanitisation Policy:** This repository is public. `output/` is gitignored, but `output_examples/` is deliberately tracked — and that boundary is where real tenant data can leak. Anything promoted into `output_examples/` must first have real tenant, capacity, workspace, and artifact GUIDs replaced with synthetic placeholders (`00000000-0000-4000-8000-0000000000NN`), and any name identifying a person, customer, or live engagement replaced with a neutral one. Credentials, tokens, and local user paths are never committed.
 
-`.github/workflows/tenant-data-scan.yml` enforces this on every push and pull request.
+`.github/workflows/tenant-data-scan.yml` enforces the GUID, credential, token, and local-path rules on every push and pull request. Identifying *names* cannot be detected automatically and remain a review responsibility.
 
 ## Creator Skills (from skills-for-fabric)
 
