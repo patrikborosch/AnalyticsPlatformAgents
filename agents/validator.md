@@ -111,7 +111,17 @@ The cheapest gate. Run it **before** anything is deployed.
 | Traceability closure | Does every `AC-nnn` from the requirements have at least one executable assertion in the blueprint? |
 | Rollback coverage | Does every stateful load declare a rollback or restart path? |
 
-**Capability legality is the highest-value check here.** A blueprint can be perfectly self-consistent and still specify something the platform cannot do. These failures are expensive to find after deployment and nearly free to find here. Consult `.resources/kb-fabric-patterns.md` and `.resources/kb-fabric-artifacts.md` for the capability boundaries, and treat any cross-boundary access pattern — cross-workspace, cross-store, cross-engine — as suspect until confirmed.
+**Capability legality is the highest-value check here.** A blueprint can be perfectly self-consistent and still specify something the platform cannot do. These failures are expensive to find after deployment and nearly free to find here. Consult `.resources/kb-fabric-patterns.md` and `.resources/kb-fabric-artifacts.md` for the capability boundaries, and check the blueprint's own capability-constraint list (`agents/modeler.md` §7.4) item by item.
+
+Treat every **cross-boundary** access path as suspect until proven legal — cross-workspace, cross-store, or cross-engine. In practice this is where most capability defects live, because a topology chosen for governance reasons quietly invalidates the data paths drawn across it. Specific traps worth checking every time:
+
+- A SQL path that crosses a workspace boundary
+- A shortcut hosted somewhere shortcuts cannot exist
+- An engine resolving another engine's objects by name rather than through a supported connector
+- A write into a store that is read-only through the path chosen
+- DDL using options the target engine rejects, or tuning properties that belong to a different vendor's runtime and do nothing here
+
+The last one deserves emphasis: a setting that is silently ignored is worse than one that errors. The blueprint claims an optimisation, the deployment reports success, and the behaviour never materialises. Nothing fails, so nothing gets investigated.
 
 ### G1 — Existence
 
