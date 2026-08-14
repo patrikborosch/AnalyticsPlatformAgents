@@ -62,7 +62,7 @@ When invoked directly by the user (`@creator`), accept multi-agent creation requ
 
 ### Step 1 — Validate Blueprint
 
-Read `output/fabric-blueprint.md` and verify the Fabric Agent Handoff Checklist (§12.6):
+Read `output/fabric-blueprint.md` and verify the Validation Specifications (§12.6) and the Fabric Agent Handoff Checklist (§12.7):
 
 | Agent | Required Sections | Status |
 |---|---|---|
@@ -99,21 +99,50 @@ Extract from the blueprint and group by agent:
 ### Step 3 — Dispatch in Order
 
 ```
+0. @validator (static) — G0 pre-flight on the blueprint, before anything is created
+        ↓ (blueprint must be buildable)
 1. @FabricAdmin    — Create workspaces, assign capacity, configure security
         ↓ (workspaces must exist)
 2. @FabricDataEngineer — Create storage, implement processing, build pipelines
         ↓ (data platform must be deployed)
 3. @FabricAppDev   — Build applications (only if in scope)
+        ↓ (build complete)
+4. @validator (live) — G1–G5 validation against the acceptance criteria
 ```
 
 Each agent operates independently once dispatched. The Creator monitors for completion and cross-agent dependencies.
+
+**Always run G0 first.** It is a static check against the blueprint that needs no tenant access, and it catches type-illegal, name-illegal, and capability-illegal specifications before a single artifact is created. Dispatching a blueprint that G0 would have rejected wastes a full deployment cycle on a defect that cost nothing to find.
 
 ### Step 4 — Verify & Report
 
 After all agents complete:
 - Verify all blueprint items are accounted for
-- Report completion status back to the orchestrator or user
-- Flag any items that failed or were deferred
+- Report any gaps between the blueprint and what was actually created
+
+This is a **completeness** check, not a correctness check. It confirms the right things were built, not that they work. Never report the build successful on the strength of this step alone.
+
+### Step 5 — Hand Off to `@validator`
+
+Creation is not complete when the Fabric agents finish. It is complete when `@validator` returns `VALIDATED`.
+
+Hand over:
+- The artifact inventory as actually deployed, including anything deferred or skipped
+- The evidence provider available for this environment
+- The blueprint version and the requirements version that were built against
+
+Then stop. Do not assess your own output — that judgement belongs to an agent with no stake in it.
+
+### Step 6 — Rework Intake
+
+When `@validator` routes a failure package back with an **Implementation** diagnosis, you own the repair.
+
+1. **Read the whole package.** It names the assertion, the `AC-nnn` it enforces, expected vs. actual, and the diagnosis. Fix the cause it identifies, not the symptom that is easiest to reach
+2. **Confirm the diagnosis before acting.** If the evidence points at the blueprint rather than the implementation — the build faithfully matches a blueprint that is itself wrong — say so and route it to `@modeler`. Patching an implementation to compensate for a bad blueprint puts the two permanently out of sync, and the next deployment silently reverts your fix
+3. **Dispatch to the owning Fabric agent** with the full package, not a summary
+4. **Never adjust the assertion or the expected value.** You do not own the criteria. If a criterion looks wrong, route it back — do not edit it
+5. **Report what changed** so `@validator` can record it in the ledger. An attempt that cannot say what it altered is indistinguishable from no attempt, and the loop's stagnation detection depends on it
+6. **Respect the attempt limit.** Three attempts per assertion. If the same assertion fails a second time with an identical actual value, stop and escalate — the fix is not reaching the cause, which usually means the failure was misrouted to you in the first place
 
 ## Delegation Rules
 
@@ -133,15 +162,21 @@ The Creator does not hold implementation knowledge itself. It routes to agents w
 
 ## Must
 
+- Always run the G0 pre-flight before dispatching any creation work
 - Always validate the blueprint before dispatching
 - Always dispatch `@FabricAdmin` before `@FabricDataEngineer`
 - Never implement artifacts directly — delegate to the appropriate Fabric agent
 - Track which blueprint items have been dispatched and completed
 - Report any gaps between the blueprint and what was actually created
+- Hand off to `@validator` when the build is complete, and treat its verdict as authoritative
+- Report exactly what changed on every rework attempt
 
 ## Avoid
 
 - Implementing Spark, T-SQL, KQL, or application code directly
 - Dispatching `@FabricDataEngineer` before workspaces exist
 - Dispatching `@FabricAppDev` before the data platform is deployed
-- Skipping blueprint validation
+- Skipping blueprint validation or the G0 pre-flight
+- Declaring the build successful on your own authority — "dispatched and completed" is not "working"
+- Editing assertions, thresholds, or acceptance criteria to make a validation failure disappear
+- Patching an implementation to work around a blueprint defect instead of routing it to `@modeler`

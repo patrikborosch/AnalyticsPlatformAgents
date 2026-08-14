@@ -86,8 +86,12 @@ You must know every Fabric artifact type and when to use each.
 | **L2 Presentation** | **Warehouse** | T-SQL for BI tool compatibility, views, stored procedures, optimised for star-join queries |
 | **L2 Presentation** (alternative) | **Lakehouse + SQL Analytics Endpoint** | If the team prefers Spark-first, L2 can stay in Lakehouse with SQL Endpoint for BI access |
 | **L4 Real-Time** | **Eventhouse / KQL Database** | Native streaming ingestion, windowed aggregations, high-performance time-series |
-| **Metadata Repository** | **Warehouse** | Structured relational tables, referential integrity, T-SQL MERGE for updates |
+| **Metadata Repository** | **Warehouse** | Structured relational tables, T-SQL MERGE for updates. **Referential integrity is not enforced** — constraints are `NOT ENFORCED` hints only |
 | **Audit Log** | **Lakehouse** or **Warehouse** | Append-only, high volume → Lakehouse; SQL query access → Warehouse |
+
+> **The Lakehouse SQL analytics endpoint is read-only.** `CREATE`/`ALTER`/`DROP TABLE` and `INSERT`/`UPDATE`/`DELETE` work only in a Warehouse. Never design a path where a Warehouse stored procedure writes into a Lakehouse — model the write in Spark instead.
+>
+> **T-SQL surface limits (Warehouse):** no triggers, materialised views, synonyms, recursive queries, `SET TRANSACTION ISOLATION LEVEL`, `SELECT … FOR XML`, `SET ROWCOUNT`, `CREATE USER`, `BULK LOAD`, `CREATE INDEX`, `DEFAULT` constraints, or manually created multi-column statistics. `MERGE`, session-scoped `#temp` tables, and `TRUNCATE TABLE` are supported. `IDENTITY` is in preview. PK/UNIQUE/FK must be added via `ALTER TABLE` with `NOT ENFORCED` — never inline in `CREATE TABLE`. Unsupported statements can *appear* to succeed while causing damage, so treat this list as a hard boundary rather than a set of preferences. Full list: <https://learn.microsoft.com/fabric/data-warehouse/tsql-surface-area>
 
 ### 2.2 Processing Artifacts
 
@@ -145,6 +149,14 @@ You must know every Fabric artifact type and when to use each.
 | `ws-<project>-meta` | Metadata Warehouse (or shared across projects) | Pipeline service principal, platform team |
 | `ws-<project>-realtime` (if needed) | Eventhouse, Eventstreams, KQL Databases, RT Dashboards | Streaming service, operations team |
 
+> **Workspace boundaries are correctness boundaries, not just organisational ones.**
+>
+> The layout above is the *maximally separated* option. Every boundary it creates also blocks a data path: three-part naming stops working, shortcuts need a bridge Lakehouse, and Spark can no longer resolve Warehouse tables by name (§7.4, constraints C1–C4). A design that separates first and discovers the constraints later ends up with a blueprint full of statements that fail at runtime.
+>
+> **Recommended default:** put `wh_present` and `wh_meta` in the **same workspace**, so stored procedures can read metadata and write audit rows using ordinary three-part naming. Separate them only when a governance or security boundary genuinely demands it — and if you do, choose the cross-workspace mechanism (bridge Lakehouse, pipeline-mediated writes) *at design time* and record it in the blueprint.
+>
+> For each workspace boundary you keep, state which data paths cross it and how each one is implemented. If you cannot name a legal mechanism for a path, the topology is wrong — not the requirement.
+
 ### 3.2 Fabric Artifact Inventory Template
 
 For every architecture, produce this inventory:
@@ -154,7 +166,7 @@ For every architecture, produce this inventory:
 | 1 | `lh_landing` | Lakehouse | ws-landing | L0 | Raw data landing |
 | 2 | `lh_persist` | Lakehouse | ws-persist | L1 | SCD2 dimensions, incremental facts |
 | 3 | `wh_present` | Warehouse | ws-present | L2 | Star-join presentation, stored procs |
-| 4 | `wh_meta` | Warehouse | ws-meta | Meta | Metadata repository tables |
+| 4 | `wh_meta` | Warehouse | ws-present (recommended) or ws-meta | Meta | Metadata repository tables. Co-locating with `wh_present` keeps audit writes on same-workspace three-part naming |
 | 5 | `nb_ingest_<source>` | Notebook | ws-landing | L0 | Generic ingestion (parameterised) |
 | 6 | `nb_scd2_merge` | Notebook | ws-persist | L1 | Generic SCD2 merge (metadata-driven) |
 | 7 | `nb_incremental_load` | Notebook | ws-persist | L1 | Generic incremental fact load |
@@ -246,9 +258,15 @@ Columns:
 | N+7 | _LoadTimestamp  | TIMESTAMP       | NO       | Row write timestamp             |
 
 Delta Properties:
-  delta.autoOptimize.optimizeWrite = true
-  delta.autoOptimize.autoCompact = true
+  delta.logRetentionDuration = interval 30 days          -- retain log for time travel / rollback
+  delta.deletedFileRetentionDuration = interval 30 days  -- retain files for time travel
+  delta.parquet.vorder.enabled = true                    -- V-Order for read-heavy L1 tables
+  delta.autoOptimize.optimizeWrite = true                -- right-sized files at write time
+  delta.autoOptimize.autoCompact = true                  -- synchronous OPTIMIZE after a fragmenting write
+  -- Run OPTIMIZE <table> ZORDER BY (BK_<Entity>) periodically as a maintenance job
 ```
+
+> **V-Order is disabled by default** in new Fabric workspaces, which favours write-heavy pipelines. Enable it deliberately on read-heavy L1/L2 tables rather than assuming it is on.
 
 ### 5.2 Warehouse Table (L2 / Metadata) — T-SQL DDL
 
@@ -258,15 +276,20 @@ CREATE TABLE [present].[dim_customer] (
     BK_Customer       VARCHAR(50)     NOT NULL,
     CustomerName      VARCHAR(200)    NULL,
     -- ... mapped attributes ...
-    _LastRefreshTimestamp DATETIME2(3) NOT NULL,
-    
-    CONSTRAINT PK_dim_customer PRIMARY KEY NONCLUSTERED (SK_Customer)
+    _LastRefreshTimestamp DATETIME2(3) NOT NULL
 );
 
--- Indexes (Fabric Warehouse supports clustered columnstore by default)
--- Additional nonclustered indexes on business key for lookups:
-CREATE INDEX IX_dim_customer_BK ON [present].[dim_customer] (BK_Customer);
+-- Constraints MUST be added afterwards. Fabric Warehouse does not accept
+-- PRIMARY KEY, UNIQUE, or FOREIGN KEY declared inline in CREATE TABLE.
+ALTER TABLE [present].[dim_customer]
+    ADD CONSTRAINT PK_dim_customer PRIMARY KEY NONCLUSTERED (SK_Customer) NOT ENFORCED;
 ```
+
+> **Two separate rules, both mandatory.** Constraints cannot be declared inline in `CREATE TABLE` — they must be added with `ALTER TABLE`. And `PRIMARY KEY`/`UNIQUE` require both `NONCLUSTERED` and `NOT ENFORCED`; `FOREIGN KEY` requires `NOT ENFORCED`. Getting only one of the two right still fails to deploy.
+>
+> Constraints are optimiser hints and documentation — never a uniqueness guarantee, because nothing enforces them. Enforce uniqueness through validation assertions (§12.6).
+>
+> Fabric Warehouse also does **not** support `CREATE INDEX` or `DEFAULT` constraints. Tables use clustered columnstore automatically; there are no user-defined nonclustered indexes to create.
 
 ### 5.3 Relationships
 
@@ -274,9 +297,9 @@ For every FK relationship, specify:
 
 | From Table | From Column | To Table | To Column | Cardinality | Enforced |
 |---|---|---|---|---|---|
-| `fact_sales` | `FK_Customer` | `dim_customer` | `SK_Customer` | Many-to-One | Semantic Model only (Fabric Warehouse does not enforce FK) |
+| `fact_sales` | `FK_Customer` | `dim_customer` | `SK_Customer` | Many-to-One | Never enforced — declare `NOT ENFORCED`; model the relationship in the Semantic Model |
 
-> **Important:** Fabric Warehouse does NOT enforce foreign key constraints at the engine level. FK relationships are declared in the **Semantic Model** for BI tools and as documentation in DDL comments.
+> **Important:** Fabric Warehouse does NOT enforce foreign key constraints at the engine level. FK relationships are declared `NOT ENFORCED` as optimiser hints, modelled in the **Semantic Model** for BI tools, and verified by referential-integrity assertions (VA-S20, VA-S21).
 
 ---
 
@@ -309,7 +332,9 @@ Logic Summary:
 
 Spark Configuration:
   spark.sql.shuffle.partitions = <recommended>
-  spark.databricks.delta.optimizeWrite.enabled = true  (Fabric default)
+  spark.sql.parquet.vorder.default = true                    -- V-Order writes for read-heavy tables
+  spark.databricks.delta.optimizeWrite.enabled = true        -- right-sized files at write time
+  spark.databricks.delta.autoCompact.enabled = true          -- auto compaction for new tables
 
 Input Tables: <list of tables read>
 Output Tables: <list of tables written>
@@ -400,10 +425,27 @@ Windowing: Tumbling window (5 min) for aggregation, or no-window for raw append
 ```python
 # PSEUDOCODE — @FabricDataEngineer implements as actual PySpark
 
-# 1. Read metadata
-mappings = spark.read.table("wh_meta.meta.Mapping") \
-    .filter(f"SourceObjectID = {source_object_id} AND TargetObjectID = {target_object_id}")
-rules = spark.read.table("wh_meta.meta.TransformationRule")
+# 1. Read metadata from wh_meta.
+#    Spark SQL table resolution does NOT cross workspaces (constraint C3), so use the
+#    built-in Spark connector for Fabric Data Warehouse, which is preinstalled in the
+#    runtime and handles cross-workspace reads via Entra passthrough.
+from com.microsoft.spark.fabric.Constants import Constants
+
+def read_meta(table):
+    return (spark.read
+        .option(Constants.WorkspaceId, "<wh_meta_workspace_id>")
+        .synapsesql(f"wh_meta.meta.{table}"))
+
+mappings = read_meta("Mapping").filter(
+    f"SourceObjectID = {source_object_id} AND TargetObjectID = {target_object_id}")
+rules = read_meta("TransformationRule")
+
+# If wh_meta is co-located in the same workspace, spark.read.table("wh_meta.meta.Mapping")
+# works directly — prefer that layout.
+#
+# The connector supports interactive Entra user auth only, not service principals. For
+# unattended pipeline runs, read metadata with a Pipeline Lookup Activity and pass the
+# values in as notebook parameters instead.
 
 # 2. Read source (L0 batch)
 source_df = spark.read.table(f"lh_landing.raw_{source_object}") \
@@ -462,7 +504,10 @@ target_table.alias("tgt").merge(
 MERGE INTO [present].[dim_customer] AS tgt
 USING (
     SELECT SK_Customer, BK_Customer, CustomerName, /* ... all attributes ... */
-    FROM [lh_persist].[dbo].[dim_customer]  -- via Shortcut
+    FROM [lh_bridge].[dbo].[dim_customer]  -- bridge Lakehouse in the SAME workspace as wh_present,
+                                           -- holding OneLake Shortcuts to lh_persist.
+                                           -- If lh_persist is already in this workspace, reference
+                                           -- [lh_persist].[dbo].[dim_customer] directly.
     WHERE _IsCurrent = 1 AND _IsDeleted = 0
 ) AS src
 ON tgt.BK_Customer = src.BK_Customer
@@ -485,10 +530,35 @@ WHEN NOT MATCHED BY SOURCE THEN
 |---|---|---|
 | External DB → L0 | Copy Activity or Notebook | Pipeline Copy Activity (SQL Server, DB2, Oracle connectors) or Notebook with JDBC |
 | Files → L0 | Notebook or Copy Activity | Notebook reads from OneLake Files section, or Copy from ADLS/Blob |
-| L0 → L1 | Notebook (PySpark) | Same Lakehouse or cross-Lakehouse Shortcut |
-| L1 → L2 | Stored Procedure or Notebook | **Shortcut** from L1 Lakehouse into L2 Warehouse, or three-part naming |
-| L2 → Semantic | `@FabricDataEngineer` via `powerbi-authoring-cli` | DirectLake mode on Warehouse tables |
-| Metadata → All | SQL queries | All Notebooks/SPs read metadata via Warehouse connection |
+| L0 → L1 | Notebook (PySpark) | Same Lakehouse, or a OneLake Shortcut into the notebook's attached Lakehouse |
+| L1 → L2 (same workspace) | Stored Procedure | Three-part naming: `[lh_persist].[dbo].[dim_customer]` resolves the Lakehouse SQL analytics endpoint |
+| L1 → L2 (**different workspace**) | Stored Procedure via bridge Lakehouse | Create `lh_bridge` in the L2 workspace, add OneLake Shortcuts pointing at `lh_persist`, then query `[lh_bridge].[dbo].[dim_customer]`. **Three-part naming cannot cross workspaces** |
+| L2 → Semantic | `@FabricDataEngineer` via `powerbi-authoring-cli` | Direct Lake on Warehouse tables |
+| Metadata → Notebook (cross-workspace) | Spark connector for Fabric Data Warehouse | `spark.read.option(Constants.WorkspaceId, "<id>").synapsesql("wh_meta.meta.Mapping")`. Preinstalled in the runtime; uses Entra passthrough. **Interactive user auth only — no service principal**, so unattended pipeline runs need a different path |
+| Metadata → Pipeline | Lookup Activity | Read metadata rows before invoking a Notebook or Stored Procedure and pass them as parameters. The usual choice for scheduled, unattended runs |
+
+---
+
+## 7.4 Fabric Capability Constraints — Check Before Modelling
+
+These are hard platform limits. Violating one produces a blueprint that deploys and then fails at runtime, or fails to deploy at all. `@validator` checks these at gate G0, but it is far cheaper not to specify them in the first place.
+
+| # | Constraint | Consequence if ignored |
+|---|---|---|
+| C1 | **Three-part naming is workspace-scoped.** Cross-database T-SQL works only between Warehouses and Lakehouse SQL analytics endpoints in the *same* workspace | Every cross-workspace query fails at runtime |
+| C2 | **Shortcuts live in Lakehouses and KQL databases only** — never inside a Warehouse. A Warehouse can be the *target* of a shortcut, not the host | The shortcut cannot be created; the design has no data path |
+| C3 | **Spark SQL name resolution does not cross workspaces.** `spark.read.table("wh_x.schema.tbl")` fails for a Warehouse in another workspace. Use the built-in Spark connector: `spark.read.option(Constants.WorkspaceId, "<id>").synapsesql("wh.schema.table")` | `AnalysisException: Table or view not found` |
+| C4 | **The SQL analytics endpoint of a Lakehouse is read-only.** A Warehouse stored procedure cannot write into a Lakehouse | Any write-back design is invalid |
+| C5 | **Warehouse constraints cannot be declared inline** in `CREATE TABLE` — add them with `ALTER TABLE`, and `PRIMARY KEY`/`UNIQUE` need both `NONCLUSTERED` and `NOT ENFORCED`. `CREATE INDEX` and `DEFAULT` constraints are unsupported | DDL deployment fails |
+| C6 | **V-Order is off by default** in new workspaces, and `OPTIMIZE`/`VACUUM` are explicit maintenance operations | Read-heavy tables silently miss an optimisation the blueprint assumed |
+| C7 | **Direct Lake falls back to DirectQuery** when a model exceeds capacity guardrails or hits an unsupported query pattern, and requires framing after data changes | Unexplained performance cliffs and stale reports |
+| C8 | **Warehouse collation is fixed at creation.** The default is `Latin1_General_100_BIN2_UTF8` — **case-sensitive**. It cannot be changed afterwards | Key matching behaves differently than in a case-insensitive source; only fixable by recreating the warehouse |
+| C9 | **Unsupported T-SQL:** triggers, materialised views, synonyms, recursive queries, `SET TRANSACTION ISOLATION LEVEL`, `SELECT … FOR XML`, `SET ROWCOUNT`, `CREATE USER`, `BULK LOAD`, manually created multi-column statistics, queries targeting system and user tables together. `MERGE`, session-scoped `#temp` tables, and `TRUNCATE TABLE` **are** supported | These may appear to succeed while corrupting behaviour — the docs warn explicitly against attempting them |
+| C10 | **`IDENTITY` columns are a preview feature.** Usable, but do not rely on them for a guaranteed gapless sequence | Surrogate key strategy may need revisiting |
+
+> **Collation deserves particular attention.** A case-sensitive default means `'ACME'` and `'Acme'` are different business keys. If the source system is case-insensitive, an SCD2 merge will treat a casing change as a genuine attribute change and create a spurious version — quietly, and forever. Decide the collation before the warehouse is created, and normalise key casing at L1 if the source is case-insensitive.
+
+**Workspace topology is a correctness concern, not just an organisational one.** Before finalising the workspace layout (§3.1), trace every data path in the design and confirm each one is legal under C1–C4. If a stored procedure must read L1 and write audit rows to a metadata store, the simplest correct answer is usually to **co-locate those items in one workspace**. Reach for bridge Lakehouses and pipeline-mediated writes only when a genuine security or governance boundary requires the separation — a boundary you can name.
 
 ---
 
@@ -543,9 +613,11 @@ CREATE TABLE [meta].[ConnectorType] (
     ConnectorName      VARCHAR(50)   NOT NULL,
     DriverClass        VARCHAR(200)  NULL,
     ConnectionTemplate VARCHAR(500)  NULL,
-    IncrementalStrategy VARCHAR(50)  NULL,
-    CONSTRAINT PK_ConnectorType PRIMARY KEY NONCLUSTERED (ConnectorTypeID)
+    IncrementalStrategy VARCHAR(50)  NULL
 );
+
+ALTER TABLE [meta].[ConnectorType]
+    ADD CONSTRAINT PK_ConnectorType PRIMARY KEY NONCLUSTERED (ConnectorTypeID) NOT ENFORCED;
 
 -- ... (all 12 tables with full DDL)
 ```
@@ -553,9 +625,17 @@ CREATE TABLE [meta].[ConnectorType] (
 ### Cross-Workspace Access
 
 Notebooks in `ws-landing` and `ws-persist` read metadata from `wh_meta` via:
-- **Shortcut** from their Lakehouse to the Warehouse
-- **Direct Spark SQL** using the Warehouse's SQL Endpoint connection string
-- **Pipeline Lookup Activity** to read metadata before passing as parameters
+- **Spark connector for Fabric Data Warehouse** — `spark.read.option(Constants.WorkspaceId, "<id>").synapsesql("wh_meta.meta.Mapping")`. Preinstalled in the runtime, honours SQL-engine security (OLS/RLS/CLS), and works across workspaces. Note it supports **interactive Entra user authentication only — not service principals**
+- **Pipeline Lookup Activity** — read metadata rows before invoking the Notebook and pass them as parameters. The right choice for **scheduled, unattended runs**, since the Spark connector cannot authenticate as a service principal
+- Plain `spark.read.table("wh_meta.meta.X")` works **only** when `wh_meta` is in the same workspace (constraint C3)
+
+> **A stored procedure in `wh_present` cannot write audit rows into `wh_meta` in another workspace.** Three-part naming does not cross workspace boundaries (constraint C1), so `INSERT INTO [wh_meta].[audit].[LoadLog]` fails at runtime. Choose one:
+>
+> 1. **Co-locate `wh_meta` with `wh_present`** — three-part naming then resolves normally. Simplest, and correct unless a governance boundary genuinely requires separation
+> 2. **Pipeline-mediated audit writes** — the orchestrating pipeline calls a logging procedure in `wh_meta` as a separate activity after the transform step
+> 3. **Local staging plus replication** — write to a log table in `wh_present` and replicate to `wh_meta` on a schedule, accepting eventual consistency
+>
+> Whichever you choose, state it explicitly in the blueprint. This decision determines whether the audit trail actually works, and an audit trail that silently fails is worse than none — it produces confident, empty compliance reports.
 
 ---
 
@@ -631,7 +711,51 @@ For each layer boundary (L0→L1, L1→L2), the exact pattern:
 Workspace layout, role assignments, cross-workspace access patterns.
 - Ready for `@FabricAdmin` to execute
 
-### 12.6 Fabric Agent Handoff Checklist
+### 12.6 Validation Specifications
+
+**This section is what makes the platform verifiable.** `@requirements` states what must be true in business terms; you translate each statement into an executable assertion; `@validator` runs it. Skip this and the loop has nothing to enforce — the platform gets judged by whoever built it, which is no judgement at all.
+
+Bind assertions from `.resources/kb-validation-assertions.md`.
+
+#### 12.6.1 Structural Assertion Bindings
+
+Every table gets the structural assertions its pattern implies. These are automatic — nobody has to remember them, which is exactly why they catch what nobody remembered.
+
+| Assertion | Applies To | Bound Expression | Expected | Severity |
+|---|---|---|---|---|
+| VA-S01 | Every SCD2 dimension | *concrete query in the target dialect* | 0 rows | Must |
+| VA-S20 | Every fact table | | 0 rows | Must |
+| VA-S30 | Every layer transition | | Match within declared tolerance | Must |
+
+Binding rules:
+- Every SCD2 dimension binds VA-S01 through VA-S06
+- Every fact binds VA-S20, VA-S21, and VA-S22 where history is required
+- Every layer transition binds VA-S30 and VA-S31
+- Every scheduled load binds VA-S40 and VA-S43
+- Every access restriction binds VA-S50 **and** VA-S51 — the negative case is not optional
+
+#### 12.6.2 Business Assertion Bindings
+
+One entry per `AC-nnn` from `output/requirements.md`.
+
+| Assertion | Enforces | Statement (verbatim from requirements) | Bound Expression | Expected / Tolerance | Severity |
+|---|---|---|---|---|---|
+| VA-B01 | AC-nnn | | | | Must / Should |
+
+Binding rules:
+- **Copy the statement verbatim.** Paraphrasing is how a criterion quietly becomes weaker than what the business agreed to
+- **Copy the tolerance exactly.** Never round it, never widen it "for practicality". If it cannot be met, that is a business conversation, not a modelling decision
+- Every `AC-nnn` binds to at least one assertion. An unbound acceptance criterion is an unkept promise, and it is a blueprint defect
+- Every assertion must be capable of failing. If no realistic data state would make it fail, it is decoration — replace it
+
+#### 12.6.3 Acceptance Criteria Coverage
+
+| AC | Severity | Bound Assertions | Gate |
+|---|---|---|---|
+
+Every `AC-nnn` from the requirements appears here. Any with no binding is reported to `@architect` and `@requirements` before handoff — not discovered later by `@validator`.
+
+### 12.7 Fabric Agent Handoff Checklist
 
 Before handoff, verify each agent has what it needs:
 
@@ -640,8 +764,9 @@ Before handoff, verify each agent has what it needs:
 | **@FabricAdmin** | Workspace layout (§3.1), security plan, capacity assignment | ☐ |
 | **@FabricDataEngineer** | Artifact inventory (§3.2), all table DDL (§5), all process specs (§6), pipeline specs (§6.3), layer transitions (§7) | ☐ |
 | **@FabricAppDev** | Consumption patterns (§7.3), L2 table inventory, connection methods | ☐ (if applicable) |
+| **@validator** | Validation specifications (§12.6) — structural and business assertions bound, full AC coverage | ☐ |
 
-### 12.7 Mermaid Diagrams
+### 12.8 Mermaid Diagrams
 - **Fabric Architecture Diagram**: Workspaces, artifacts, data flow
 - **Pipeline Activity Diagram**: Flowchart of all pipeline activities
 - **Table Relationship Diagram**: ERD for each layer
@@ -664,6 +789,7 @@ Before handoff, verify each agent has what it needs:
 ### Creator Handoff
 - Compile all specifications into a structured document
 - Include pseudocode for every Notebook and Stored Procedure
+- Complete the Validation Specifications (§12.6) — every `AC-nnn` bound, every applicable structural assertion bound
 - Mark any decisions the Fabric agents need to make (e.g., exact Spark partition count)
 - Tag each section with the responsible Fabric agent so `@creator` can dispatch:
   - **@FabricAdmin**: Workspace layout, capacity, RBAC, governance

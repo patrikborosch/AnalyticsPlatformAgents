@@ -33,7 +33,10 @@ For file sources (CSV, JSON, Parquet, Excel, XML):
 batch_id = int(getArgument("batch_id"))
 source_object_id = int(getArgument("source_object_id"))
 
-# Read metadata
+# Read metadata.
+# Spark SQL resolves `wh_meta.meta.*` ONLY when wh_meta is a Warehouse in the same
+# workspace as the notebook's default Lakehouse. For a cross-workspace Warehouse this
+# raises AnalysisException — use JDBC against the TDS endpoint instead (see Pattern 5a).
 source_obj = spark.sql(f"""
     SELECT so.*, s.SourceName 
     FROM wh_meta.meta.SourceObject so
@@ -260,42 +263,75 @@ pl_main_orchestrator
 └── Stored Procedure: sp_log_pipeline_complete (@BatchID, 'Complete')
 ```
 
-## Pattern 5: Cross-Workspace Access via Shortcuts
+## Pattern 5a: Reading a Cross-Workspace Warehouse from Spark
 
-### Setting Up Shortcuts
+`spark.sql("SELECT ... FROM wh_meta.meta.Mapping")` and `spark.read.table("wh_meta.meta.Mapping")` resolve names through the Spark metastore, which is **workspace-scoped**. If `wh_meta` lives in a different workspace from the notebook, these raise `AnalysisException: Table or view not found`.
+
+Use the **Spark connector for Fabric Data Warehouse**, which is preinstalled in the runtime and supports cross-workspace reads:
+
+```python
+from com.microsoft.spark.fabric.Constants import Constants
+
+mappings = (spark.read
+    .option(Constants.WorkspaceId, "<wh_meta_workspace_id>")
+    .synapsesql("wh_meta.meta.Mapping"))
+
+# Custom query variant
+rules = (spark.read
+    .option(Constants.DatabaseName, "wh_meta")
+    .synapsesql("SELECT * FROM meta.TransformationRule WHERE IsActive = 1"))
+```
+
+The connector honours object-, row-, and column-level security defined in the SQL engine.
+
+**Authentication constraint:** it supports **interactive Microsoft Entra user authentication only — service principals are not supported.** For scheduled, unattended pipeline runs, read the metadata with a **Pipeline Lookup Activity** and pass the values into the notebook as parameters instead.
+
+**Prefer co-location.** If `wh_meta` sits in the same workspace as the notebook's Lakehouse, plain `spark.read.table(...)` works and all of the above disappears. Separate workspaces are a governance decision that costs real implementation complexity — take it deliberately, not by default.
+
+## Pattern 5: Cross-Workspace Access — Bridge Lakehouse
+
+**Shortcuts can only be created inside a Lakehouse or a KQL database — never inside a Warehouse.** A Warehouse can be the *target* of a shortcut, but it cannot host one. And three-part naming resolves only within a single workspace. Together these two constraints rule out the obvious-looking design of "shortcut the L1 tables into the L2 Warehouse".
+
+### Setting Up Cross-Workspace Access
 
 ```
-Scenario: L2 Warehouse needs to read L1 Lakehouse tables
+Scenario: L2 Warehouse (wh_present, ws-present) must read L1 Lakehouse tables
+          (lh_persist, ws-persist)
 
-1. In ws-present (Warehouse workspace):
-   - Create Shortcut in wh_present pointing to:
+1. Create a bridge Lakehouse in the SAME workspace as the Warehouse:
+   ws-present → new Lakehouse → lh_bridge
+
+2. In lh_bridge/Tables/, create a OneLake Shortcut per required table:
      Source: OneLake → ws-persist → lh_persist → Tables → dim_customer
-     Name: lh_persist_dim_customer
+     Name:   dim_customer
 
-2. The Warehouse can now query:
-   SELECT * FROM [lh_persist_dim_customer].[dbo].[dim_customer]
-   
-   Or via three-part naming if Lakehouse SQL Endpoint is used
+3. The Warehouse stored procedure now uses same-workspace three-part naming:
+     SELECT * FROM [lh_bridge].[dbo].[dim_customer] WHERE _IsCurrent = 1
 ```
 
-### Cross-Database Queries (Warehouse → Lakehouse)
+**Simpler alternative:** place `lh_persist` and `wh_present` in the same workspace and query `[lh_persist].[dbo].[dim_customer]` directly. Only introduce the bridge when a governance boundary requires the workspaces to stay separate.
+
+### Cross-Database Queries (Warehouse → Lakehouse, same workspace only)
 
 ```sql
--- In Warehouse stored procedure:
--- Query Lakehouse tables via SQL Analytics Endpoint
-SELECT * 
-FROM [lh_persist].[dbo].[dim_customer]  -- three-part name via linked connection
+-- In a Warehouse stored procedure. Valid ONLY when the Lakehouse is in the
+-- same workspace as the Warehouse — three-part naming does not cross workspaces.
+SELECT *
+FROM [lh_persist].[dbo].[dim_customer]   -- Lakehouse SQL analytics endpoint
 WHERE _IsCurrent = 1
 ```
+
+> The Lakehouse SQL analytics endpoint is **read-only**. A Warehouse stored procedure can read from it but can never write back into the Lakehouse.
 
 ## Pattern 6: Delta Lake Configuration
 
 ### Recommended Delta Properties for L1 Tables
 
 ```python
-# Set at table creation or via ALTER TABLE
+# Set at table creation or via ALTER TABLE.
 spark.sql("""
     ALTER TABLE dim_customer SET TBLPROPERTIES (
+        'delta.parquet.vorder.enabled' = 'true',
         'delta.autoOptimize.optimizeWrite' = 'true',
         'delta.autoOptimize.autoCompact' = 'true',
         'delta.logRetentionDuration' = 'interval 30 days',
@@ -303,9 +339,12 @@ spark.sql("""
     )
 """)
 
-# Z-ORDER for SCD2 lookup performance
+# Auto compaction runs a synchronous OPTIMIZE after a fragmenting write. Scheduled
+# OPTIMIZE is still worthwhile for Z-Order, which auto compaction does not apply.
 spark.sql("OPTIMIZE dim_customer ZORDER BY (BK_Customer)")
 ```
+
+> **V-Order is disabled by default** in new Fabric workspaces (favouring write-heavy pipelines). Enable it deliberately on read-heavy tables. Equivalent session configs: `spark.databricks.delta.optimizeWrite.enabled`, `spark.databricks.delta.autoCompact.enabled`, `spark.sql.parquet.vorder.default`.
 
 ### Partition Strategy
 
