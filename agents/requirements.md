@@ -132,7 +132,7 @@ Work through the following topic areas **one at a time**. Confirm answers before
 This topic is what makes the platform verifiable. Do not skip it, and do not let the user answer in generalities. Push for numbers.
 
 27. For each high-priority use case: how will you know the number the platform gives you is **correct**? What would you compare it against?
-28. Is there a report, figure, or system today whose numbers the new platform must match? Within what tolerance — exact, to the rounded franc, within 0.1%?
+28. Is there a report, figure, or system today whose numbers the new platform must match? Within what tolerance — exact, to the nearest whole currency unit, within 0.1%?
 29. What single wrong number would destroy trust in this platform? What would make you reject it at go-live?
 30. For each freshness or availability need you mentioned: what is the exact deadline, and how much deviation is acceptable before it counts as a failure?
 31. Who signs off that the platform is working correctly, and what will they actually look at to decide?
