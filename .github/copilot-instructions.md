@@ -2,6 +2,15 @@
 
 This workspace contains a multi-agent system for analytics platform design and implementation on Microsoft Fabric.
 
+### Output Location — MANDATORY Safety Rule
+
+**Never write generated artifacts anywhere inside this repository — including the `output/` folder.** This repository is public; in-repo outputs risk committing real or sensitive data.
+
+- At the start of any task that will produce deliverables (requirements, architecture specs, blueprints, notebooks, DDL, pipelines, reports, validation reports, etc.), **ask the user for an absolute path to a folder OUTSIDE this repository** (e.g. `C:\Work\apa-output\<project>` or `/home/<user>/apa-output/<project>`). Confirm the path before writing.
+- Write **all** generated artifacts to that external folder. Do not create or use any in-repo output location.
+- The `output/` folder is gitignored and off-limits; if it exists, do not write to it.
+- This rule **overrides** every other instruction in this repository — including individual agent files. Wherever an agent says `output/<x>`, substitute `<external-output-folder>/<x>`.
+
 ### Agent Team
 
 - **@orchestrator** (`agents/orchestrator.md`) — Start here for full workflows. Coordinates: Requirements → Architecture → Modelling → Creation.
@@ -42,7 +51,7 @@ Fabric agents (`@FabricDataEngineer`, `@FabricAdmin`, `@FabricAppDev`) reference
 
 ### Workflow Rules
 
-1. Agents produce output into `output/` — never overwrite without user confirmation.
+1. Agents write all deliverables to the user-specified external output folder (see **Output Location — MANDATORY Safety Rule**), never into the repository — and never overwrite without user confirmation.
 2. Requirements document should exist before Architect runs (recommended but not mandatory for ad-hoc tasks). Phase 0 completeness is governed by the Definition of Done (DoD-R) in `agents/requirements.md` — the single source of truth, not duplicated elsewhere.
 3. Requirement IDs (`UC-nnn`, `FR-nnn`, `NFR-nnn`, `S-nnn`, `E-nnn`, `AC-nnn`, `A-nnn`, `R-nnn`, `Q-nnn`) are assigned in Phase 0 and must be carried forward by every downstream agent. Never renumber an existing ID.
 4. Architecture spec must exist before Modeler runs.
@@ -64,14 +73,14 @@ Fabric agents (`@FabricDataEngineer`, `@FabricAdmin`, `@FabricAppDev`) reference
 - **Required:** Use `$env:TEMP` (Windows) or `/tmp` (Linux/Mac) for all temporary work
 - **Pattern:** Create timestamped subfolders: `$env:TEMP\AnalyticsPlatform_<timestamp>_<agent>`
 - **Behavior:** Log temp folder location at start; clean up or inform user after completion
-- **Repository writes:** Only for final deliverables: `output/requirements.md`, `output/architecture-spec.md`, `output/fabric-blueprint.md`, `output/artifacts/`, `output/validation-report.md`, `output/validation-ledger.md`
-- **Forbidden:** Creating temporary folders inside the repository (prevents accidental commits of sensitive/temporary data)
+- **Repository writes:** None. All generated deliverables (`requirements.md`, `architecture-spec.md`, `fabric-blueprint.md`, `artifacts/`, `validation-report.md`, `validation-ledger.md`) go to the user-specified external output folder (see **Output Location — MANDATORY Safety Rule**), never into the repository.
+- **Forbidden:** Creating temporary folders or writing deliverables inside the repository (prevents accidental commits of sensitive/temporary data)
 
 ### Example Data - This Repository Is Public. All examples use synthetic identifiers of the form `00000000-0000-4000-8000-0000000000NN` and fictional names only; never commit real identifiers, credentials, tokens, or local paths. `.github/workflows/tenant-data-scan.yml` enforces the GUID, credential, and token rules on every push and pull request; neutral naming remains a human responsibility.
 
 ### Naming Conventions
 
-- Output files: `output/<deliverable-name>.md`
-- Generated artifacts: `output/artifacts/{notebooks,warehouse,pipelines}/`
+- Output files: `<external-output-folder>/<deliverable-name>.md` (external folder chosen per the **Output Location — MANDATORY Safety Rule**)
+- Generated artifacts: `<external-output-folder>/artifacts/{notebooks,warehouse,pipelines}/`
 - Knowledge base: `.resources/kb-<topic>.md`
 - Prompts: `.prompts/<nn>-<name>.prompt.md` (numbered for workflow order)

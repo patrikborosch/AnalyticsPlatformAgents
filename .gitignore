@@ -16,18 +16,9 @@ venv/
 # Node
 node_modules/
 
-# Runtime output (agents write here; only skeleton is tracked)
-output/*
-!output/README.md
-!output/artifacts/
-output/artifacts/*
-!output/artifacts/notebooks/
-!output/artifacts/pipelines/
-!output/artifacts/warehouse/
-output/artifacts/notebooks/*
-output/artifacts/pipelines/*
-output/artifacts/warehouse/*
-!output/artifacts/**/.gitkeep
+# Runtime output — NEVER committed. Agents must write deliverables to an external
+# folder OUTSIDE this repository (see .github/copilot-instructions.md).
+output/
 
 # Office files (may contain author metadata)
 *.docx
