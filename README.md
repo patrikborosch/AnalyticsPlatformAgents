@@ -86,13 +86,7 @@ AnalyticsPlatformAgents/
 │   ├── docs/                      # Skill authoring guides, architecture docs
 │   ├── prompt_examples/           # Example prompts for Fabric workflows
 │   └── mcp-setup/                 # MCP server configuration
-├── output/                    # Runtime target for agent-generated deliverables
-│   └── artifacts/             # Skeleton (notebooks, warehouse, pipelines)
-├── output_examples/           # Committed example deliverables
-│   ├── requirements.md        # Contoso Rail scenario example
-│   ├── architecture-spec.md
-│   ├── fabric-blueprint.md
-│   └── artifacts/
+├── output/                    # Runtime target for agent-generated deliverables (gitignored)
 └── .github/
     └── copilot-instructions.md
 ```

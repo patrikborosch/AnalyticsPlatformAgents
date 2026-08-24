@@ -115,7 +115,6 @@ creator/
   └── docs/      Guides for authoring new skills and extending the system
 .resources/      6 knowledge base files (SCD patterns, layered arch, Fabric artifacts)
 output/          Runtime target for agent deliverables (gitignored)
-output_examples/ Reference examples — specs, blueprints, notebooks, DDL, pipelines
 ```
 
 ---
