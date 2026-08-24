@@ -163,11 +163,6 @@ The `creator/` folder contains the official Microsoft Fabric skills from [aka.ms
 
 Drop additional skill folders into `creator/skills/` following the same pattern (`SKILL.md` + optional `references/` or `resources/`). Shared knowledge goes in `creator/common/`.
 
-## Sample Outputs
+## Outputs
 
-The `output_examples/` folder contains example deliverables from a Contoso Rail Visitors analytics platform design:
-- `requirements.md` — Business requirements document with use case backlog, source inventory, NFRs, acceptance criteria, stakeholder register, DoD attestation, and architect handoff
-- `architecture-spec.md` — Three-layer architecture (Landing/Persistence/Presentation) with SCD2, metadata-driven ETL, 6 Mermaid diagrams
-- `fabric-blueprint.md` — Fabric implementation with Lakehouse (L0/L1), Warehouse (L2), Notebook specs, Pipeline definitions
-
-At runtime, agents write into `output/` (gitignored except skeleton). See `output/README.md` for details.
+At runtime, agents write their deliverables into `output/`, which is gitignored.
