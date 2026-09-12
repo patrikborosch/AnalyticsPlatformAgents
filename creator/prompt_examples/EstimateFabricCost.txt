@@ -1,0 +1,5 @@
+Before I migrate to Fabric, estimate the capacity I'll need.
+
+My current workload is roughly: 8 Spark jobs running nightly over about 2 TB, a Power BI model refreshed hourly for 200 users, and a small real-time stream.
+
+Recommend a capacity SKU, compare Pay-As-You-Go vs Reserved Instance, and show the monthly cost breakdown across compute, storage, and networking.

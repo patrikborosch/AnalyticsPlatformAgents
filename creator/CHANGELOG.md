@@ -1,48 +1,280 @@
 # Changelog
 
-All notable changes to the skills-for-fabric marketplace will be documented in this file.
+User-facing changes for the public Microsoft Fabric Skills release.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.3.16] - 2026-09-10
 
-## [Unreleased]
 ### Added
-- **`tests/evals/pipeline-migration/eval.yaml`** -- Vally eval for the
-  `pipeline-migration` skill, migrating the two `tests/tests.json` stimuli
-  (`pipeline-migration-routing`, `pipeline-migration-inline-json-translate`)
-  into the reference `eval.yaml` shape. Mirrors the `synapse-migration`
-  sibling (migration persona, guidance/offline -- forbids live Fabric REST
-  calls and `az rest` mutations). Grader layers:
-  - **Layer 0** (deterministic): `skill-invocation` (require
-    `pipeline-migration`, reject `synapse-migration` and sibling authoring
-    skills), `completed`, `output-not-matches` for runtime errors / fatal
-    crash markers, `output-contains` on the canonical Synapse -> Fabric
-    Data Factory translation invariants (`TridentNotebook`,
-    `libraryVariables`, the substituted notebook GUID, the
-    `My ADLS Connection` display name), `output-matches` on the dataset-
-    inlining narrative, and `output-not-matches` regression guards
-    forbidding the legacy Create-Connection payload shape (`connectorId`,
-    `singleCredential`) per reviewer asander_microsoft.
-  - **Layer 1** (tool-calls): offline contract -- disallow live Fabric REST
-    calls and `az rest` mutations via a canonical `&shell_tool` regex
-    anchor reused across both stimuli.
-  - **Layer 2** (program verifier):
-    `tests/evals/_graders/pipeline-migration/verify-pipeline-translation.ps1`
-    runs on both stimuli (routing-narrative mode and JSON-translate mode).
-    Asserts the modern `libraryVariables` form is present (accepts both
-    expression and block syntax) and -- in JSON-translate mode --
-    forbids the deprecated `pipeline().globalParameters.` expression from
-    surviving inside the emitted Fabric pipeline content. The survival
-    check scans fenced Fabric blocks (identified by a `TridentNotebook`
-    marker); if the model emits the Fabric JSON unfenced, the verifier
-    falls back to extracting JSON-ish windows around each
-    `TridentNotebook` occurrence so an unfenced answer cannot false-pass.
-- **`tests/evals/_graders/pipeline-migration/verify-pipeline-translation.ps1`**
-  -- the Layer 2 verifier described above. Emits Vally-shaped JSON
-  (`passed`, `score`, `evidence`, `metadata`) so failures surface as
-  actionable single-line findings in the eval report.
-- **Vally evals for MLV** -- two new smoke-tier stims in `tests/evals/spark-authoring-cli/eval.yaml` covering MLV creation and incremental-refresh-readiness review. Graders cover skill-invocation, `CREATE [OR REPLACE] MATERIALIZED LAKE VIEW` syntax + `CONSTRAINT ... CHECK` + `ON MISMATCH DROP|FAIL` presence on the create stim, and refresh-vocabulary + window-function/`DISTINCT` recognition + an affirmative-only "is incremental-refresh-safe" negative grader on the review stim. Token budget set to 150K (`max_tokens: 150000`) — ~100K optimal for code-gen/text-analysis stims + 50% buffer for agent non-determinism. Plan-level coverage in `tests/full-eval-tests/plan/03-individual-skills/eval-spark-authoring.md` SA-40 through SA-44.
-- **MLV routing tests** -- new `TestSparkAuthoringMLVRouting` class in `tests/test_skill_routing.py` with 8 parametrized MLV prompts plus a tokenize-based trigger-presence test that mirrors the router's Jaccard tokenization (catches accidental removal of any committed MLV trigger phrase).
+- Added a root `apm.yml` plus a generated `skills/<name>/apm.yml` for every skill, so a user can install a single skill with `apm install microsoft/skills-for-fabric --skill <name>` instead of a whole plugin bundle.
+- Documented the APM bootstrap and the single-skill install flow, including the scope difference between Copilot CLI (`-g`, `~/.copilot/mcp-config.json`) and VS Code (project scope, `.vscode/mcp.json`).
+
+### Changed
+- Corrected the MCP setup reference in `sqldw-cli` to link the `mcp-setup/README.md` file rather than the directory, so the link resolves for a single installed skill.
+
+### Fixed
+- The `fabric-skills` plugin reuses Azure CLI sign-in for remote MCP connections in local Claude Code. Added matching Codex configuration and guidance for older registrations, without copying access tokens or registering another OAuth application.
+- Improved plugin installation compatibility with older Claude Code versions.
+
+## [0.3.15] - 2026-09-04
+
+
+### Added
+- **`skills/sqldw-cli`** -- added a read-only Capacity Metrics workflow that discovers the installed metrics model, adapts to timestamped or fixed-window schema variants, identifies costly Warehouse and Lakehouse SQL endpoint items, and analyzes every Query Insights request overlapping the Capacity Metrics spike range. Results keep fixed-window capacity health separate from broader item history, disclose timeframe and 30-day Query Insights limits, and treat SQL statement candidates as best-effort correlation because Capacity Metrics Operation Id and Query Insights `distributed_statement_id` are different identifiers.
+- **`onelake-catalog-govern-cli`** -- audits and safely remediates Microsoft Fabric OneLake catalog governance across domains, workspaces, capacities, protection, and curation, with separate permission-aware modes for tenant admins and data owners.
+
+### Changed
+- **`skills/sqldw-cli`** -- expanded composite diagnostics for failed and canceled requests, SQL pool pressure, resource concentration, Lakehouse table health, performance regressions, optimization targets, and user/application activity. Custom SQL pool guidance now uses recurring historical contention and stable application classifiers rather than converting Capacity Metrics CU seconds or Query Insights CPU milliseconds into pool percentages.
+- **`skills/sqldw-cli`** -- made operations follow-ups user-facing: results now turn evidence into concrete actions on the investigated workload, SQL item, capacity, or correlation report, while retaining timezone, retention, lag, and confidence caveats as limitations rather than skill-development suggestions.
+
+### Fixed
+- **`skills/sqldw-cli`** -- corrected pressure intervals to use the complete pool-state event stream and exact pool matching, included canceled requests in non-success analysis, limited Lakehouse health checks to Lakehouse SQL analytics endpoints, and stopped recommending result-set caching while the feature is unavailable.
+- **`skills/sqldw-cli`** -- retained command-less and legitimate Query Insights-referencing requests in historical custom-pool profiles, excluding only agent-labeled diagnostics, and widened duration and CPU aggregation to `bigint`.
+- **`semantic-model-authoring`** -- preserves existing Prep data for AI configuration during unrelated semantic model edits and uses the Power BI modeling MCP for read-only metadata discovery when available.
+- `synapse-migration` now handles Dedicated SQL Pool DACPAC and zipped SQL-project schema and code migrations more reliably, validates generated Spark SQL, safely resumes interrupted operations, and isolates concurrent migrations across multiple datamarts.
+
+## [0.3.14] - 2026-08-26
+
+
+### Added
+- **`databricks-migration`** -- added a guided four-phase workflow for inventorying, preparing, migrating, validating, and cutting over Databricks workloads to Fabric.
+- **`databricks-migration`** -- added post-migration checks for environments, schemas, row counts, notebook and job execution, output comparison, and validation reporting.
+- **`databricks-migration`** -- added troubleshooting guidance for common migration issues involving DLT, namespaces, widgets, Photon, DBFS, streaming, init scripts, and Git integration.
+
+### Changed
+- **Skill descriptions rewritten so the assistant picks the right one more often.** Every skill now states plainly what it owns, what it can do, when to choose it, and which neighbouring skill owns the work next door. Previously several skills described their area only in general terms, so a request that sat between two of them could reach the wrong skill -- or none at all, with the assistant answering from general knowledge instead. Requests that name a specific Fabric item or operation now land on the skill that owns it.
+
+- **The full skill catalog fits comfortably within what the assistant reads at startup.** Only each skill's name and description are loaded up front, and that space is limited. The catalog previously ran close enough to the limit that adding skills risked pushing later ones past it -- and a skill past the limit is known only by its name, so the assistant can no longer tell what it does and chooses between skills on the name alone. The descriptions are now about 40% shorter with no loss of routing accuracy, leaving room for the catalog to grow.
+- **`databricks-migration`** -- expanded migration planning with Blocker, Warning, and Info severity levels, accurate Scala and SparkR compatibility guidance, schema-enabled Lakehouse mapping, and structured failure reporting.
+- **`semantic-model-authoring`** -- enable the `fabric-skills` bundle to use the hosted Power BI modeling service for semantic model authoring, while the `powerbi-authoring` bundle continues to support the local modeling server.
+
+### Fixed
+- **Seven skills regained the exact words people type.** The description rewrite favoured readable prose and, in doing so, dropped the literal tokens a request actually matches on: `MLV` and `OOM` (`spark-cli`), `count rows` and `SELECT` (`sqldw-cli`), `dacpac` and `sys.tables` (`sqldb-cli`), `executeQuery` and `saveAsNativeArtifact` (`dataflows-cli`), `libraryVariables` and `notebookutils` (`variable-library-cli`), and the `Gen1`/`Gen2` "not supported" caveat (`search-consumption-cli`). `git-integration-operations-cli` also lost its exclusions, so a question about `fabric-cicd` or branch switching could be captured by a skill that cannot help -- worse than a miss, because the answer sounds confident. Prose reads better to a reviewer; literals are what match a user's words. All seven are back, every description still inside the 450-character cap, for 361 characters against roughly 3,850 of bundle headroom.
+
+- **`variable-library-cli`'s description was not a grammatical sentence.** "…and valueSets overrides, which consumers can reference a variable and with what syntax across pipelines…" -- a malformed clause in the one field the router reads. Rewritten, and `libraryVariables` and `notebookutils variableLibrary` restored with it.
+
+- **`activator-cli`, `sqldw-cli` and `variable-library-cli`** -- these skills pointed you at skills that no longer exist. Their guidance still referred to `eventstream-authoring-cli`, `eventhouse-consumption-cli`, `spark-authoring-cli` and the separate `sqldb-authoring-cli` / `sqldb-consumption-cli` / `sqldb-operations-cli` skills, all of which were merged into single per-item skills in earlier releases. Handing work to a name that is not installed left the request stranded. They now name the current skills: `eventstream-cli`, `eventhouse-cli`, `spark-cli` and `sqldb-cli`.
+
+- **`sqldb-cli`** -- "run a query against my Fabric SQL database" reached the Warehouse skill instead. `sqldb-cli` presented itself as a design-and-troubleshoot skill and never claimed plain querying, so the Warehouse skill won on the word "query". It now leads with querying a SQL database item, so the request reaches the right engine.
+
+- **Git integration, deployment pipelines, Spark, Variable Library and Fabric IQ** -- several common requests reached the wrong skill or none at all: disconnecting a workspace from Git, asking which permissions or roles a deployment-pipeline stage needs, creating a materialized lake view, asking what a Variable Library value resolves to for a given release, and querying Fabric IQ directly. Each of these now names the case explicitly, so the request reaches the skill that handles it.
+- **`databricks-migration`** -- corrected Databricks inventory commands, schema-enabled Lakehouse creation, Maven and JAR library handling, Environment definition paths, notebook export, Spark Job Definition deployment, job execution URLs, Spark version validation, and cancelled-versus-timed-out run handling.
+
+## [0.3.13] - 2026-08-20
+
+
+### Added
+- **`skills/git-integration-operations-cli`** -- guidance for avoiding formatting-only diffs on Git sync. Fabric re-serializes item source (`notebook-content.py`, `pipeline-content.json`, `.platform`) to its canonical form (LF, no trailing final newline) on export, so an editor or AI agent that adds a trailing newline or CRLF causes every sync to report a spurious uncommitted change. Adds a troubleshooting-table row plus a "Avoiding formatting-only diffs" reference section with `.editorconfig` / `.gitattributes` snippets to pin the synced repo, and links the separate per-cell notebook newline rule in `spark-authoring-cli`.
+- **`synapse-migration`** -- add a source-driven workflow for migrating Synapse Dedicated SQL Pool schema and executable code artifacts to Fabric Lakehouse, including discovery, gap assessment, T-SQL to readable Spark SQL `%%sql` notebook conversion, deployment, and validation. Stored-procedure notebooks reject PySpark/DataFrame conversions and source-only placeholders. Source table-row migration remains explicitly out of scope.
+- **`synapse-migration`** -- make the gap report feature-wise and risk-driven, with support level, likelihood, impact, risk rationale, target pattern, and explicit `1:0`/`1:1`/`1:N`/`N:1`/`N:M`/`Deferred` cardinality. Target artifacts are generated only from approved designs; one source object is no longer assumed to equal one Lakehouse artifact.
+- **`synapse-migration`** -- assess discovered procedure volume against projected Fabric workspace item usage, then require the user to provide and approve a `1:1`, `N:1`, or `N:N` notebook mapping, target names, and workspace placement before conversion begins.
+
+### Fixed
+- **`activator-cli`** -- creating an Activator item no longer fails with `HTTP 400 DisplayName field is required`. The authoring reference documented the create endpoint without a request body, and every rule, binding, data source and action argument in an Activator definition legitimately uses a `name` key, so `name` was easily carried over to the item itself by mistake. The Item CRUD section now includes a complete create request showing `displayName`, a callout explaining that `displayName` identifies the item while `name` belongs only inside the definition entities, and a matching entry in the AVOID list.
+- **`activator-cli`** -- the authoring reference now shows the `fabricItemAction-v1` request payload inline at the assembly step that builds it, with the target carried in `payload.fabricItem` (`itemId`, `workspaceId`, `itemType`) and the supported `itemType` / `jobType` pairs listed, plus an AVOID entry for the invalid `targetItem` shape. The key was previously documented only in the delegated per-target reference, so a rule authored several steps after that file was read could invoke an item action that `updateDefinition` accepts but that never resolves its target.
+- **`activator-cli`** -- the create request example now sends `--headers "Content-Type=application/json"` and carries a PowerShell variant that writes the body to `$env:TEMP` and passes it with `--body "@<file>"`. The section previously showed only a bash example with inline single-quoted JSON, so a PowerShell run failed twice before recovering -- once with `UnsupportedMediaType` for the missing content type, then with `InvalidInput` / `Unexpected character encountered while parsing value` when the shell mangled the inline JSON. The prose caveat pointing at the AVOID entry was not enough on its own, since the worked example is what gets copied.
+- **`activator-cli`** -- the attribute assembly step now states that each attribute entity covers one source field and needs a unique name, that the identity field is already covered by its `IdentityPartAttribute`, and that cloning an attribute requires updating the `EventFieldSelector` `fieldName` as well as the payload `name`. Two matching AVOID entries were added. A cloned attribute that still selects the original field is accepted by `updateDefinition` and silently reads the wrong column.
+- **`synapse-migration`** -- publish generated stored-procedure notebooks with externally overridable parameters, bounded status polling, clear failure reporting, persisted-definition readback, Lakehouse-binding checks, collision-safe idempotency, per-object approval states, and artifact-level validation.
+- **`synapse-migration`** -- preserve stored-procedure input behavior by keeping supported inputs externally overridable, retaining exact source defaults only as `%%configure` fallbacks, blocking invented defaults, and rejecting generated SQL that replaces parameters with hardcoded literals or constant preview views.
+- **`synapse-migration`** -- preserve each `1:1` stored-procedure `sourceName` as the generated notebook filename and Fabric display name, while retaining complete per-procedure traceability for approved decomposed or shared notebooks.
+- **`synapse-migration`** -- make large stored-procedure migrations fully traceable and reproducible while preserving audit and logging behavior, retrying only failed conversion work, and validating complete source coverage before deployment.
+
+## [0.3.12] - 2026-08-13
+
+### Added
+- **`skills/variable-library-cli`** -- new Microsoft Fabric skill for Variable Library definitions, value sets, active value set item state, and VL-side consumer wiring via CLI. Covers authoring, consumption and operations as modes of one skill.
+- **Event Schema Set authoring** -- create, rename, override the definition of, and delete an Event Schema Set, alongside the existing read-only inspection.
+
+### Changed
+- **`skills/sqldw-cli`** -- `sqldw-authoring-cli`, `sqldw-consumption-cli`, and `sqldw-operations-cli` are now authoring, consumption, and operations modes of one skill. Existing capabilities and prompts remain supported; the MCP `fabric-sqlendpoint-execute_query` path remains primary, with the same Legacy CLI Fallback available when needed.
+- **`skills/eventschemaset-cli`** -- unified Event Schema Set authoring (create, rename, override definition, delete) and read-only consumption (list, inspect, decode) behind one mode-dispatching skill, via the Fabric Items REST API (`az rest` + `jq` + base64 definitions). Handles `202 Accepted` long-running operations and the Preview delegated-identity constraints, and is available in the `fabric-authoring`, `fabric-consumption`, and `fabric-skills` plugin bundles.
+- **`README.md` and `public/README.md`** -- the update-checking section is now a host-by-host table (Copilot CLI / Claude Code / Cursor, Windsurf and others) documenting how to turn on automatic updates, with the recommended `extraKnownMarketplaces` + `autoUpdate` snippet for Copilot CLI and a note that each release bumps the plugin `version` field.
+- **`compatibility/CLAUDE.md`** -- the session-start update-check directive is replaced with Claude Code's one-time third-party marketplace auto-update opt-in, plus the on-demand `claude plugin update <plugin>@fabric-collection` command and a fallback for loose (non-plugin) copies.
+- **Installation** -- the shipped bundles are now `fabric-skills` (every Fabric skill) and `powerbi-authoring` (Power BI report and semantic-model skills plus the `powerbi-modeling-mcp` server). The three retired ids remain resolvable as deprecated marketplace aliases of `fabric-skills`, so an already-installed user keeps working through `/plugin update`; the alias delivers the full union bundle rather than the former persona subset. New installs should use `fabric-skills`.
+
+### Removed
+- **`skills/sqldw-authoring-cli`**, **`skills/sqldw-consumption-cli`**, **`skills/sqldw-operations-cli`** -- superseded by the `sqldw-cli` item skill. Install `sqldw-cli` instead; it covers all three surfaces.
+- **`skills/eventschemaset-consumption-cli`** -- replaced by `skills/eventschemaset-cli`.
+- **BREAKING -- the `check-updates` skill has been removed outright** (no deprecation stub). It is gone from all five plugin bundles (`fabric-skills`, `fabric-authoring`, `fabric-consumption`, `fabric-operations`, `powerbi-authoring`), so `/fabric-skills:check-updates` and the other `<bundle>:check-updates` invocations no longer resolve. The skill did not update anything on its own initiative: it resolved the install context, compared versions, and surfaced the host's own native update command, executing it only on an unambiguous request. Both major hosts support native auto-update once configured -- GitHub Copilot CLI supports `"autoUpdate": true` on an `extraKnownMarketplaces` entry in personal user settings, while Claude Code provides a one-time **Enable auto-update** marketplace action or a managed-settings `"autoUpdate": true` option -- which makes the skill redundant at the cost of a mandatory blockquote on every skill load. On-demand updates remain available via `/plugin update` and `copilot plugin update --all`.
+- **The mandatory once-per-session "Update Check" blockquote** has been stripped from every `SKILL.md` (30 skills) and is no longer a structural requirement. This reclaims the context budget the notice consumed on every skill load, and removes the extra with-skill token overhead that previously skewed skill-ROI comparisons.
+- **`fabric-authoring`, `fabric-consumption`, `fabric-operations` plugin bundles** -- retired. Each was a strict subset of `fabric-skills` in skills, agents, and MCP servers, so every skill they carried still ships in `fabric-skills`. The persona split stopped describing a real boundary once skills merged to one skill per Fabric item: `sqldw-cli`, `sqldb-cli`, and `spark-cli` each carry authoring, consumption, and operations modes, so each appeared in all three bundles and installing `fabric-operations` shipped the full Spark authoring guidance.
+
+### Fixed
+- **`skills/spark-consumption-cli`** -- corrected simple Lakehouse SQL endpoint routing guidance to use the MCP `fabric-sqlendpoint-execute_query` path instead of the stale `sqlcmd` client name.
+
+## [0.3.11] - 2026-08-06
+
+
+### Added
+- **`skills/git-integration-operations-cli`** -- new Microsoft Fabric skill for driving the Git integration lifecycle of a workspace via CLI: connect/disconnect against Azure DevOps and GitHub, initialize the connection, commit workspace items to Git, update (pull) a workspace from Git, check sync status, and resolve conflicts.
+- **`skills/deployment-pipelines-authoring-cli`** -- new authoring skill for Microsoft Fabric
+  deployment pipelines (ALM / CI-CD). Guides the Fabric core REST API surface
+  (`/v1/deploymentPipelines`) to create pipelines and stages, assign/unassign workspaces to stages,
+  and deploy stage content across dev/test/prod as a long-running operation (all items or selective
+  item deploys). Covers per-operation **delegated scopes** (`Pipeline.Read.All` / `Pipeline.ReadWrite.All`
+  / `Workspace.ReadWrite.All`, and `Pipeline.Deploy` for deploy), required **permissions** (pipeline Admin
+  + workspace roles), **item pairing / autobinding** repair (unassign->reassign with a deployment-rule-loss
+  warning), and a maintainable **supported item types** reference reconciled from the official Microsoft
+  Fabric documentation.
+- **`skills/deployment-pipelines-authoring-cli/references/scripts/diff_item_definitions.py`** -- a local,
+  stdlib-only tool that compares two stages' `getDefinition` payloads and emits **only** the differences.
+  It decodes each base64 part, **normalizes** the fields Fabric auto-rebinds on deploy (pipeline
+  `notebookId`/`workspaceId`, report->model id, Direct Lake server/db, connections) to avoid false-positive
+  "changed" items, matches parts by path, and produces a structural JSON diff for JSON parts and a unified
+  diff for text parts (TMDL/`.py`/`.pq`). Exit code mirrors POSIX `diff` (`0`=identical, `1`=changed,
+  `2`=error) so it doubles as the change detector for selective deploys; includes a built-in `--selftest`.
+  This lets the *Deploy only changed items* workflow forward **only the emitted diff** (a few lines) to the
+  model instead of two full definitions (>100 KB).
+- **Change-detection & deploy guidance** -- the skill documents that `List stage items` returns item
+  identity + pairing (`itemId`, `itemDisplayName`, `itemType`, `sourceItemId`, `targetItemId`,
+  `lastDeploymentTime`) with no change status, and that `lastDeploymentTime` is the last *deployment* time
+  (not the last edit), so change detection must diff `getDefinition` payloads per stage; notes the
+  `getDefinition` contract differs by type (Notebook/SemanticModel/Report are LRO, DataPipeline is
+  synchronous; Warehouse has no definition API); and captures deploy operational caveats -- one operation
+  per pipeline at a time (`WorkspaceMigrationOperationInProgress` HTTP 400), first-deploy warm-up
+  (`Alm_InvalidRequest_WorkloadUnavailable`, ~60-120 s), the `x-ms-operation-id` response-header location,
+  the 300-item-per-deploy cap, the write-only deploy `note`, and that deploys copy definitions, not data.
+- **`skills/fabriciq-ontology-cli`** -- unified Fabric IQ Ontology skill with explicit authoring and consumption modes.
+- **`skills/eventstream-cli`** -- one Eventstream skill with authoring and consumption modes for topology creation, lifecycle changes, inspection, health, retention, throughput and Custom Endpoint connection metadata.
+- **`skills/activator-cli`** -- one Activator / Reflex skill with authoring and consumption modes covering item and rule creation, sources, conditions and actions, plus read-only listing, inspection and `ReflexEntities.json` decoding.
+- Added `sqldb-cli`, a three-mode dispatcher for Fabric SQL database authoring, consumption, and OLTP performance diagnostics.
+
+### Changed
+- **`skills/mlv-operations-cli`** -- documents the Fabric MLV job-type mismatch where history/status can show `MaterializedLakeViews`, but on-demand refresh must use the lakehouse-scoped `refreshMaterializedLakeViews/instances` endpoint. The skill now also absorbs the 2026-07-01 public API additions for MLV execution definitions and selected-lineage refresh via `executionData.mlvExecutionDefinitionId`, and directs interactive recurring refresh to Lakehouse schedules instead of notebook or pipeline orchestration.
+- **Skill naming convention** -- skills are now named `{item}-cli`, one per Fabric item or capability, and cover authoring, consumption and operations as internal **modes**, selected by a dispatcher in `SKILL.md` with per-mode detail under `references/{mode}.md`. New `-authoring-` / `-consumption-` / `-operations-` skills are no longer created; add the capability as a mode of the item skill instead. Existing skills keep their names until their item migrates.
+- **`skills/dataflows-cli`** -- `dataflows-authoring-cli`, `dataflows-consumption-cli` and `dataflows-save-as-authoring-cli` are now the authoring, consumption and upgrade modes of a single `dataflows-cli` skill. Behaviour is unchanged; the guidance moved into `references/{mode}.md` and the dispatcher carries a terminal-write table so each mode's state-changing call stays in the always-loaded body.
+- **`skills/eventhouse-cli`** -- unified Eventhouse authoring and read-only KQL consumption behind one mode-dispatching skill.
+
+### Removed
+- **`skills/dataflows-authoring-cli`**, **`skills/dataflows-consumption-cli`**, **`skills/dataflows-save-as-authoring-cli`** -- superseded by the `dataflows-cli` item skill. Install `dataflows-cli` instead; it covers all three surfaces.
+- **`skills/fabriciq-ontology-authoring-cli`** and **`skills/fabriciq-ontology-consumption-cli`** -- folded into `fabriciq-ontology-cli` without changing their operational guidance.
+- **`skills/eventstream-authoring-cli`** and **`skills/eventstream-consumption-cli`** -- replaced by the matching modes in `skills/eventstream-cli`.
+- **`skills/eventhouse-authoring-cli`** and **`skills/eventhouse-consumption-cli`** -- replaced by `skills/eventhouse-cli`.
+- **`skills/activator-authoring-cli`** and **`skills/activator-consumption-cli`** -- replaced by the matching modes in `skills/activator-cli`.
+- Removed the superseded `sqldb-authoring-cli`, `sqldb-consumption-cli`, and `sqldb-operations-cli` top-level skills.
+
+### Fixed
+- **`.mcp.json`, `plugins/fabric-skills`, `plugins/fabric-consumption`** -- explicitly allow-list every FabricIQ MCP tool via `"tools": ["*"]`, so hosts that gate MCP tools on an explicit allow-list expose the full FabricIQ tool set (artifact discovery, schema inspection, value search, query execution) to the agent.
+- **`eventstream-cli` lifecycle control** -- documented bodyless pause requests, the required resume `startType` body, and the correct source/destination pause and resume endpoint order.
+- **`plugins/*`** -- fix Claude Cowork "Marketplace sync failed" by materializing a `.claude-plugin/plugin.json` in each plugin bundle. The plugin trees only carried the Copilot manifest at `.github/plugin/plugin.json`, so Claude/Cowork strict-mode discovery could not find the plugin manifest it expects. The Claude manifest is generated from the same per-plugin source manifest (no drift) and shipped to the public repo during sync.
+- **`.claude-plugin/marketplace.json`, `plugins/*/.claude-plugin/plugin.json`** -- fix `/plugin install <bundle>@fabric-collection` failing in Claude Code with `This plugin uses a source type your Claude Code version does not support`. Claude Code parses each `mcpServers` entry against a closed stdio/sse/http/ws schema that treats `tools` as reserved, so the per-server allow-list added for Copilot CLI made every bundle carrying MCP servers unparseable; the misleading "source type" wording pointed nowhere near the real field. Both Claude-facing manifests are now generated through `claude_safe_mcp_servers()`, which drops only that key, and the build fails non-zero if any Claude-facing manifest carries it. Copilot CLI keeps its allow-list unchanged. Resolves microsoft/skills-for-fabric#69.
+
+## [0.3.10] - 2026-07-30
+
+### Added
+- **`skills/e2e-fabric-cost-estimation`** -- new skill for estimating Microsoft Fabric workload costs before migration. Covers CU capacity sizing, billing-mode strategy (Reserved vs. PAYG vs. Autoscale Billing for Spark), storage/network pricing, SKU right-sizing, and multi-cloud source cost equivalence (Databricks/Synapse/HDInsight and other platforms). The skill instructs the agent to fetch prices live where public APIs exist (Azure Retail Prices API, AWS Price List, GCP Cloud Billing Catalog) and from official pricing pages or the customer's billing/usage data where they don't (Databricks, Snowflake, Teradata), rather than hardcoding them, and to surface the source and date with every quoted figure.
+
+- **`skills/eventschemaset-consumption-cli`** -- new read-only skill to list, inspect, and describe Microsoft Fabric Event Schema Sets via the Fabric Items REST API (`az rest` + `jq`): enumerate Event Schema Sets in a workspace, read item properties (OneLake root path, sensitivity label, tags), and retrieve then base64-decode the item definition to summarize its `eventTypes` and `schemas`.
+- **`activator-authoring-cli` and `activator-consumption-cli`** -- create and inspect alerts backed by Power BI reports and semantic models, including validated metric queries, personalized filters, and explicit handling of the current public readback limitation.
+
+### Changed
+- **`skills/sqldw-consumption-cli`, `skills/sqldw-authoring-cli`, `skills/sqldw-operations-cli`** -- the
+  primary T-SQL execution path is now the native `fabric-sqlendpoint-execute_query` MCP tool instead of
+  shelling out to `sqlcmd`. SKILL.md and `references/` updated to call
+  `execute_query(workspaceId, itemId, query)` (GUID-based identity, single-batch, no `GO`), document the
+  MCP limits (10,000-row cap, 300s timeout, 20 req/min), and keep `sqlcmd` only as a documented legacy
+  fallback. The Fabric SQL Endpoint MCP server (`fabric-sqlendpoint`) ships headerless in the
+  consumption/authoring/operations plugins and authenticates lazily via Copilot's native session.
+- **`skills/semantic-model-authoring`** -- Added a metadata-discovery capability using DAX `INFO` functions (new `references/metadata-discovery.md` + `Discover Semantic Model Metadata` workflow). 
+
+### Removed
+- **`skills/semantic-model-consumption`** -- Removed. Its capabilities are now split between two skills: semantic-model metadata discovery (DAX `INFO` functions) moved into `semantic-model-authoring`, and natural-language data queries are handled by `fabriciq`.
+
+### Fixed
+- **`skills/sqldw-operations-cli/references/query-reference.md`** -- clarified that the MCP tool does not
+  support sqlcmd-style external parameter substitution (in-batch `DECLARE` T-SQL variables are fine), and
+  changed the `DATEADD(..., -N, ...)` parameter-table defaults to positive `N` so substitution no longer
+  produces a double-negative.
+- **`skills/sqldw-consumption-cli/references/discovery-queries.md`** -- removed leftover `sqlcmd` artifacts
+  (`$SQLCMD -Q ... -W`); query blocks now show plain T-SQL (the `query` parameter value) in `sql`-tagged fences.
+- **SQL DW `SKILL.md` connection snippets** -- the workspace-discovery step now captures the result into
+  `WS_ID` before reusing it, so the copy/paste flow works end-to-end. Bare code fences are language-tagged,
+  and a note clarifies that the concrete MCP tool name may be prefixed.
+- **`skills/sqldw-consumption-cli/references/script-templates.md`** -- export template lists explicit
+  columns (no `SELECT *`) with a stable `ORDER BY` key.
+- **`skills/sqldw-authoring-cli/references/authoring-cli-quickref.md`** -- upsert example wrapped in
+  `TRY/CATCH` with `ROLLBACK` + `THROW` for safe transaction handling.
+- **`skills/sqldw-authoring-cli/references/authoring-script-templates.md`** -- added a placeholders note for
+  the illustrative storage URLs, dates, and `LABEL` values.
+- **SQL DW `SKILL.md` + quickref `itemId` guidance** -- clarified that for a Lakehouse the `itemId` must be
+  the SQL analytics endpoint id (`properties.sqlEndpointProperties.id`), not the lakehouse item id.
+- **`hdinsight-migration`** - corrected HDFS guidance and improved routing for Oozie action migration requests.
+- **`sqldb-operations-cli`** -- avoid installing SQL client tooling during diagnostics by using an available PowerShell SqlClient provider when an installed `sqlcmd` client cannot authenticate, or reporting that no compatible preinstalled TDS client is available.
+
+## [0.3.9] - 2026-07-23
+
+### Added
+- **`skills/azmon-mirroredcatalogs-operations-cli`** -- onboards Azure Monitor / Application Insights / Log Analytics observability data into Microsoft Fabric as a Mirrored Catalog item and turns that telemetry into business-impact insights by correlating observability signals with business data, ending in ready-to-paste Operations Agent instructions.
+
+### Changed
+- **`skills/semantic-model-authoring`** -- removed instructions that referenced the upcoming Copilot file format.
+- **`databricks-migration`** -- expanded Databricks-to-Fabric guidance for `dbutils` replacements, notebook parameters, environments, Lakehouse table references, MLflow, and workload mappings.
+
+### Fixed
+- **`skills/activator-authoring-cli`** -- treat schema-only, zero-row, non-emitting, or stale signal sources as missing source data so the skill stops and asks for source details instead of force-fitting a rule onto an unrelated existing item.
+- **`skills/activator-consumption-cli`** -- route read-only "show me all Activators" prompts to consumption guidance instead of the authoring skill.
+- **`check-updates`** -- detects marketplace plugins, direct plugins, positively identified Git clones, and loose skills copied or materialized from a file or URL; isolates the seven-day cache by installed entry or clone root; provides host-appropriate Copilot, Claude, Cursor, or safe no-command update guidance; and offers an explicit, confirmation-gated migration from official loose copies to a complete current plugin bundle.
+- **`databricks-migration`** -- corrected mount and notebook parameter guidance, and now requires inventory and constraint clarification before recommending a workspace-wide Fabric topology.
+
+## [0.3.8] - 2026-07-16
+
+### Added
+- **Public issue routing** -- the public repository now provides dedicated bug and feature issue forms with a required owner-area selector and automatic `area:<slug>` labeling.
+
+### Changed
+- **Installation and update guidance** -- the public README now clarifies the scope of the main and focused plugin bundles and documents both per-bundle updates and `copilot plugin update --all`.
+- **Skill routing boundaries** -- improved selection across catalog search, Dataflows Gen1 save-as, Spark authoring/consumption/operations, Warehouse SQL, MLV operations, and end-to-end medallion prompts. Ad hoc Livy session execution now routes to `spark-consumption-cli`.
+- **`eventstream-authoring-cli`** -- user-defined topology node names now require alphanumeric PascalCase; the platform-generated `DefaultStream` naming exception is documented.
+
+### Fixed
+- **`dataflows-authoring-cli`** -- connector capability answers now use the tenant's live `supportedConnectionTypes` endpoint, and completion summaries identify the actual definition persist endpoint used.
+- **`dataflows-save-as-authoring-cli`** -- readiness output now consistently uses the canonical `Save-As Readiness Snapshot` heading.
+
+## [0.3.7] - 2026-07-09
+
+### Added
+- **`skills/sqldb-authoring-cli/SKILL.md`, `skills/sqldb-consumption-cli/SKILL.md`, `skills/sqldb-operations-cli/SKILL.md`** -- new SQL Database in Fabric skills (authoring, read-only consumption, and performance/diagnostics).
+
+### Changed
+- **`skills/powerbi-report-authoring`**, **`skills/powerbi-report-design`**, **`skills/powerbi-report-management`**, **`skills/powerbi-report-planning`** -- refreshed guidance (no routing or version changes): `cardVisual` vs. legacy `multiRowCard` anti-patterns and multi-value card guidance, `catalog describe` role-name verification (`Data` vs. legacy `Fields`), CLI `@latest` install/update guidance, PBIR `.platform`/`version.json`/`pages.json` scaffolding clarifications, conditional-formatting data-bars and single-hue gradient guidance, `fontColor` vs. `fontColorPrimary` handling, Desktop unsaved-changes pre-reload check, slicer tooltip `visualTooltip.show` requirement, and cartesian/non-cartesian per-series color guidance.
+- **`skills/dataflows-authoring-cli`** -- treats a terminal, non-retriable Dataflow Gen2 refresh outcome as a stop condition instead of a debugging loop: a refresh/LRO job reaching terminal `Failed`/`Cancelled`, a backend error with `isRetriable: false`, or a workspace-wide `UnknownException` now surfaces the raw `failureReason` and ends. Refresh-failure isolation is bounded to a single `executeQuery` attempt. The refresh-poll examples (bash + PowerShell) poll a bounded loop over the known terminal set (`Completed`/`Failed`/`Cancelled`/`Deduped`), treat `Deduped` as concurrency (another refresh already running) rather than a failure, and surface `.failureReason` on `Failed`/`Cancelled`.
+
+### Fixed
+- **`skills/powerbi-report-authoring`** -- schema-version guidance no longer points at the unpublished `visualContainer/2.10.0` schema (which returns 404 on live `$schema` validation); it now copies `$schema` from an existing `visual.json` and otherwise falls back to the published `2.9.0`. Fixes microsoft/skills-for-fabric#55.
+- **`skills/powerbi-report-authoring`** -- map fallback guidance uses the valid `clusteredBarChart` visual type (was the invalid `barChartClustered`) and no longer mislabels `shapeMap` as a legacy visual (only `map`/`filledMap` are legacy Bing Maps visuals; verified via `powerbi-report-author validate`).
+- **`skills/powerbi-report-design`** -- accessibility target-size criterion corrected from WCAG 2.5.5 (Target Size Enhanced, AAA, ≥44px) to 2.5.8 (Target Size Minimum, AA, ≥24px), and contrast-ratio examples corrected. Fixes microsoft/skills-for-fabric#43.
+- **`skills/powerbi-report-authoring`** -- `version.json` scaffolding guidance now stresses preserving the full scaffolded file including `$schema`, avoiding the local-validate-passes-but-Fabric-`updateDefinition`-rejects mismatch. Relates to microsoft/skills-for-fabric#35.
+- **`skills/activator-authoring-cli`** -- when a requested alert or rule targets a signal that no discoverable source in the workspace exposes, the skill now stops and asks which source and fields provide it instead of creating a Reflex or modifying an unrelated existing item to force-fit the request.
+
+## [0.3.6] - 2026-07-02
+
+### Added
+- **`skills/dataflows-authoring-cli`** -- preview-and-confirm step in the dataflow creation flow: the agent previews each entity via `executeQuery` and renders ASCII line/bar charts (`references/charts/line_chart.py`, `references/charts/bar_chart.py`) so the user can validate output before the first refresh.
+
+### Changed
+- **Eventstream skills enhanced** (`eventstream-authoring-cli`, `eventstream-consumption-cli`; both shipped in v0.3.5) -- SKILL.md, core-reference, and API-endpoint refinements detailed below.
+- **`eventstream-consumption-cli` — Custom Endpoint connection string retrieval recipe.** New "Get Custom Endpoint Connection String" section with full `az rest` CLI recipes (bash + PowerShell) showing the 2-step Topology API workflow: get topology → get source connection. Includes security guidance, multi-source disambiguation, Kafka producer config table, and MUST DO rule.
+- **`EVENTSTREAM-AUTHORING-CORE.md` — Eventhouse ingestion modes guidance.** Added ProcessedIngestion as recommended API-automatable path with full example, DirectIngestion warning documenting the known UI-only data connection limitation, cross-skill collaboration pattern table, and CDC bracket-escaping fix.
+- **Corrected Eventstream Definition API endpoints** -- All SKILL.md code blocks updated from unsupported `GET .../definition` / `PUT .../definition` to the official `POST .../getDefinition` / `POST .../updateDefinition` per Microsoft Learn docs.
+- **`skills/search-consumption-cli`** -- reworked the skill description and triggers to lead with catalog-search framing ("search for an item", "search the catalog", "catalog search") and dropped discovery-verb-only triggers that did not reliably route to it. The skill now activates for cross-tenant "search the catalog for an item" requests, which is its actual purpose (the Fabric Catalog Search API). Reconciled the troubleshooting note on indexing lag (variable, not yet near-real-time; not a fixed ~24h).
+
+### Fixed
+- **`skills/dataflows-consumption-cli`** -- chart reference examples are now runnable as-written: bar-chart example passes the required `--labels`, `jq group_by` is preceded by `sort_by`, and the bar/pie renderers cast labels to `str` to avoid `TypeError` on numeric JSON categories.
+
+## [0.3.5] - 2026-06-25
+
+### Added
+- **New skills `fabriciq-ontology-authoring-cli` and `fabriciq-ontology-consumption-cli`** — Fabric IQ Ontology (preview) support from the CLI. `fabriciq-ontology-authoring-cli` creates and evolves Ontology items (entity types, properties incl. timeseries, relationship types, and bindings to OneLake lakehouse or Eventhouse / KQL tables) via the Fabric item-definition REST API with a mandatory Preview & Confirm gate before any LRO write. `fabriciq-ontology-consumption-cli` reads Ontology items to produce agent grounding context and routes ontology-backed data queries by binding type to the matching per-datasource consumption skill (`eventhouse-consumption-cli`, `spark-consumption-cli`, `sqldw-consumption-cli`). Adds per-skill `references/` (including a shared ontology schema reference bundled into each skill).
+- **New skill: `mlv-operations-cli`** -- Manage Materialized Lake View (MLV) refresh schedules and job execution via Fabric REST APIs. Provides scheduling and monitoring operations (9 endpoints):
+  - **Schedule Management**: Create/list/update/delete refresh schedules (Cron, Daily, Weekly, Monthly)
+  - **Job Execution**: Trigger on-demand refreshes, monitor job status/history, cancel running jobs
+  - **UX Patterns**: Human-in-the-loop confirmations, step-by-step planning, iterative error handling
+  - **Gap Documentation**: Transparently documents MLV discovery limitations — user must provide lakehouse ID and table names manually
+- **Cross-skill integration** -- Routing from spark-authoring-cli, spark-operations-cli, FabricDataEngineer agent delegation
+- **Competitive advantage** -- Fabric is first platform to offer conversational MLV scheduling (Databricks Lakeflow has no equivalent)
+
+## [0.3.4] - 2026-06-18
+
+### Added
 - **Materialized Lake View (MLV) resources for `spark-authoring-cli`** -- two new resource documents:
   - `resources/materialized-lake-view-patterns.md` -- MLV design guidance, layering patterns, when to use MLVs vs. plain Delta tables, and the SQL-vs-PySpark authoring tradeoff (PySpark MLVs are lineage-schedule-refresh only and don't support on-demand notebook refresh).
   - `resources/mlv-incremental-refresh-patterns.md` -- refresh-readiness review workflow, IR-friendly syntax guide, full-refresh blocker catalog, and safe non-breaking rewrites.
@@ -50,259 +282,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Cross-link from `e2e-medallion-architecture` PREFER section** -- points Silver/Gold layer authoring at the new MLV resources.
 - **M language semantics reference for `dataflows-authoring-cli`** — new `references/m-language.md` covering language-side pitfalls confirmed live against a Fabric Dataflow Gen2 via `executeQuery`: `try` success vs failure record shapes (`[HasError, Value]` vs `[HasError, Error[Reason, Message, Detail]]`), `try ... otherwise` short-circuit semantics, per-cell error wrapping in `Table.TransformColumnTypes` and `Table.TransformColumns` (errors stored at the cell level — Arrow renders them as `null` but reads raise), `each` scoping divergence between row contexts (`Table.SelectRows`: `_` is a row record) and sub-table contexts (`Table.Group`: `_` is the sub-table — use `_[Col]` for the column-as-list), optional field access (`r[key]?`, `Record.FieldOrDefault`), quoted-identifier escaping (`#"..."`), error-record construction, and sandbox-disabled symbols. SKILL.md References table updated.
 - **Source connector patterns for `dataflows-authoring-cli`** — new `references/connectors.md` covering the M-side source connector surface: live-verified function inventory (`Lakehouse.Contents`, `Sql.Database`, `Fabric.Warehouse`, `OData.Feed`, `Web.Contents`, `PowerPlatform.Dataflows`, `Snowflake.Databases`, `AzureStorage.DataLake`, `Excel.Workbook`, `Variable.Value`, `Html.Table`, `Csv.Document`, `Json.Document`, `Lines.FromBinary`), verified Lakehouse deep navigation (`workspaceId` → `lakehouseId` → flat-table `Name` index), `PowerPlatform.Dataflows` workspace/dataflow navigation (`{[Id="Workspaces"]}[Data]` → `workspaceId` → `dataflowName`), runtime-disabled functions (`Web.Page`, `Web.BrowserContents`), credentialed-connector argument shapes, the in-band `{"Error":"..."}` decoding contract for `executeQuery` Arrow responses, and the `[AllowCombine = true]` multi-source section attribute. Every behaviour claim was reproduced live via `executeQuery`.
-- **`.github/skills/pre-pr-check`** -- repo-local skill walking workload-team contributors through `quality_checker` + ephemeral-tenant smoke (`tests/run-smoke-tests.ps1 -testName`) + filtered full-eval (`-PlanFilter`) for changed skills. Invoke via `/pre-pr-check`.
-- **`.github/skills/pre-pr-review`** -- repo-local skill running 3 parallel cross-verified reviewers against the maintainer / bot checklist before requesting human review. Invoke via `/pre-pr-review`.
-- **`.changeset/` per-PR changelog fragments** -- eliminates merge conflicts on `CHANGELOG.md` when multiple PRs are open. `ReleaseScripts/StampUnreleased.ps1` consumes fragments at release time. See `.changeset/README.md`.
-- **`.changeset/` audience marker for public-vs-internal routing** -- fragments can opt in with `audience: public` (default: internal) so contributor changes meant for external users of `microsoft/skills-for-fabric` are auto-prepended into `public/CHANGELOG.md` at release time, in addition to the internal `CHANGELOG.md`. Maintainers can still hand-curate the public file before tagging.
-- `tests/evals/` Layer 0 coverage for the previously smoke-only skills, plus `fabriciq` and `semantic-model-authoring`.
-- `tests/test_eval_yaml_mcp_servers.py` structural lint: any skill bundled in a plugin that ships `powerbi-modeling-mcp` must also declare that server in its `eval.yaml`; reverse-direction check (for `powerbi-modeling-mcp`-class declarations) catches references to servers not present in any plugin manifest. Both directions scoped to `ENFORCED_MCP_SERVERS = {"powerbi-modeling-mcp"}` for Option C; `FabricIQ` (HTTP MCP, separate auth path) is intentionally out of scope and its servers/typos are not checked.
-- `tests/test_vally_native_mcp_staging.py` end-to-end test: drives `tests/run-vally-eval.ps1 -DryRun` across local-dev, CI-inject, missing-cert, and non-MCP scenarios to confirm the staged YAML is correct in each path.
-- `tests/test_eval_yaml_structure.py::test_every_stim_has_positive_output_assertion` -- new hard-fail lint requiring every stim to carry `output-matches` OR `output-contains` so L0 cannot pass on routing/completion/no-crash/budgets alone. Existing stims that legitimately have no testable positive output (routing-negative + L1/L2-asserted stims) carry `l0_exempt: [positive-output-assertion]` with a `TODO(workload-team)` to backfill.
-- `tests/vally-ci/Render-VallyTranscripts.ps1` per-trial human-readable transcript renderer: walks `results.jsonl` and emits `transcripts/<eval>__<stim>__trial<N>.txt` (mirroring the legacy smoke `<test>_output.txt` ergonomic). Wired into `fabric-smoke-vally.yml` to run per-shard before artifact upload. Trial counter keyed by `(eval, stim)` so each stim's trials number 1..N independently. Apply secret redaction via shared `tests/vally-ci/Get-RedactedEvidence.ps1` (GUIDs, bearer tokens, `tenant=...`) before any value lands in an artifact.
-- `tests/vally-ci/Get-RedactedEvidence.ps1` shared producer-side evidence redactor (extracted from `Export-VallySchemaArtifact.ps1`). Used by both the dashboard schema emitter and the transcript renderer so artifact producers stay in lockstep. Companion Pester tests cover GUIDs (case-insensitive), bearer tokens, `tenant=` query values, length cap, and backslash safety.
-- **Vally producer for the dashboard schema** (`tests/vally-ci/Export-VallySchemaArtifact.ps1`) -- vally runs now publish the same `${date}/${run_id}/${skill}/` tree that smoke does, plus a new sibling `deepLinks.json` carrying per-shard job IDs + per-stim deep-link metadata. Uploaded as `smoke-results-schema-vally-${run_id}-${run_attempt}` with 60-day retention so the dashboard's daily-recompute backstop never loses days at the tail.
-- **RootCause classifier** (`tests/vally-ci/Classify-VallyFailure.ps1`) -- 11-class taxonomy (`Routing` / `WallTimeBudget` / `TokenBudget` / `TurnBudget` / `SessionIdle` / `AuthOrSetup` / `ToolError` / `ContentMismatch` / `HarnessCrash` / `EvalThreshold` / `Other`). Two-pass rule engine: grader-name matches (high confidence) win over evidence-regex matches (medium confidence); unknown -> `Other` (low confidence). Wired into `Aggregate-VallyResults.ps1`'s FailureRows so every failure carries a `RootCause` field.
-- **Root-cause breakdown in the in-run job summary** (`tests/vally-ci/Format-VallyJobSummary.ps1`) -- a mini-table grouping failures by RootCause class so PR authors see classifier output BEFORE the dashboard PR ships. The Grader failures table also gains a `Root cause` column when rows carry the field.
-- **GitHub Actions deep-link gatherer** (`tests/vally-ci/Get-VallyDeepLinks.ps1`) -- queries `gh api` for the current run's jobs + artifacts so the emitter can populate `deepLinks.json`. Hard-fails on `gh` non-zero with one retry (same explicit-error pattern as `dashboard-build.yml`'s artifact-list loop). Artifacts are filtered by the current attempt so reruns don't surface stale prior-attempt links. Per-stim log-line offsets are intentionally NOT emitted in this PR (the prior cross-skill-shard pairing was structurally broken); the renderer degrades to the job-page anchor, and a per-(skill, stim) log parser is tracked as a follow-up.
-- **Dashboard renderer: vally grader disclosure** (`.github/scripts/build-dashboard.py`) -- per-failing-stim `details` block expands to a small inline table showing every grader that ran on the stim (passing + failing), with columns: Grader / Status / Root cause / Evidence. Summary text shows the denominator (e.g. "2 of 8 graders failed") so the reviewer sees triage context at a glance. Color-coded RootCause chips, truncated Evidence preview with the full text in the `title=` tooltip. Failing rows pick up a red-tint background. All vally-only DOM is conditional on the optional `deepLinks.json` sibling being present so legacy `smoke-results-schema-*` artifacts continue to render unchanged. Outbound deep-link anchors are not rendered in this iteration -- the `deepLinks.json` artifact still carries job + artifact IDs for future downstream consumers.
-- **Schema docs** (`docs/skill-test-result-schema.md`) -- documented `deepLinks.json` sibling + `rootCause` optional field. Both are OPTIONAL so older in-window artifacts don't poison the dashboard.
-- **`.github/dependabot.yml`** -- re-enabled for the `github-actions` ecosystem only, grouped by maintainer org (`actions-org` covers `actions/*` + `github/*`; `azure-org` covers `azure/*`). Group `update-types` is restricted to `minor` + `patch` so majors fall out as individual PRs (intentional: majors warrant individual review). Schedule: weekly, Monday 06:00 UTC. `open-pull-requests-limit: 5`. Commit prefix `ci(deps)`. No `reviewers:` field (branch protection + label notifications cover routing). `pip` + `npm` ecosystems intentionally deferred to future work.
-- **`CONTRIBUTING.md`** -- new "CLI vs. MCP: Choosing an Access Method" section sets `-cli` as the default access method for new skills, explains why (shared `az login` auth baseline via `common/COMMON-CLI.md`, fewer LLM round-trips, lower runtime surface), enumerates the auth/runtime cost of adding an MCP server (separate process, second auth path on top of `az login`, extra failure surface), lists the cases where `-mcp` is genuinely justified (typed tool contracts, server-side caches, persistent sessions, centralized policy enforcement, no equivalent CLI/REST path), and adds a migration gate: `-cli` → `-mcp` swaps of shipped skills now require an issue + core-team sign-off + side-by-side eval (quality, latency, tokens-per-prompt) + remote-server design notes before the PR. Added a `-mcp means *remote* MCP` policy note that rejects local-stdio MCP wrappers around `sqlcmd`/`az rest` up front (no compensating server-side wins, strictly more LLM-inefficient, extra install/supply-chain burden). Added a matching PR-checklist item and cross-references from the access-method discussion and `docs/mcp-servers-guide.md`.
 - **Gemini CLI compatibility** -- new `compatibility/GEMINI.md` (a thin `@./AGENTS.md` import) is flattened to the public repo root by the release flow, so cloning the public repo enables Gemini CLI automatically.
-- **`ReleaseScripts/PublishToPublic.ps1` Phase-1 parity gate (primary guard)** -- before publishing new content, Phase 1 now runs `check_public_release_parity.py --no-issue` and HARD-BLOCKS (non-zero exit) when a version already shipped to `microsoft/skills-for-fabric` has no matching GitHub Release. This stops the operator at the point of use and forces them to run Phase 2 (`-PublishRelease`) for the outstanding version before publishing more on top of the gap. In `-DryRun` it warns instead of blocking.
-- **`.github/workflows/public-release-parity.yml` + `.github/scripts/check_public_release_parity.py`** -- a WEEKLY safety net for the one case the Phase-1 gate cannot catch: the LATEST release (nothing publishes after it to trigger the gate). It reads the public repo's `package.json` version + releases (read-only, default `GITHUB_TOKEN`) and, on a gap, opens a label-deduped tracking issue on this repo, auto-closing it once the release exists. Runs with `--no-fail-on-gap` so the job stays green (the issue is the signal). No public push and no extra secrets -- a detector, not an auto-healer. The same script powers both call sites (single detector); pure logic + the exit-code contract are unit-tested in `tests/test_check_public_release_parity.py`, wired into the `quality-check.yml` `coverage-unit-tests` step and the workflow path filters.
-- `tests/test_full_eval_watchdog.py` -- unit coverage for the per-plan watchdog decision logic, wired into the `quality-check.yml` coverage-unit-tests batch.
-- **`l1l2_exempt` opt-out in the eval-structure gate** (`tests/test_eval_yaml_structure.py`) -- offline / codegen / pure-advice stims that build nothing in Fabric can opt out of the mandatory Layer-1 `tool-calls` + Layer-2 `program` graders with a per-stim `l1l2_exempt: "<reason>"`. The reason is mandatory (a present-but-empty value hard-fails) and every usage is surfaced as a stderr WARN. Documented in `tests/evals/README.md`.
-- **`fabriciq` skill** — Query Power BI data through the Fabric MCP endpoint using multi-step orchestration (discover artifacts, inspect schemas, resolve values, generate and execute DAX queries). Uses the FabricIQ MCP server tools.
-- **`FabricIQ` agent** — Power BI insights agent that answers business questions backed by Power BI data. Orchestrates the `fabriciq` skill for end-to-end data analysis.
-- **Skill ownership manifest schemaVersion 3 -- partitioned co-ownership.** Optional `areas: list[string]` on a contact entry (documents which sub-areas that contact specifically owns) and optional `additionalContacts: list[dict]` on a team (lists co-owners with name + email + optional github + optional areas). `additionalContacts.github` is optional (DGs / DLs without a GitHub handle omit the key); the primary `contact.github` is also optional under v3 (relaxed from v2, where it was required) so a team can route via a DG / DL. Under v3, primary contact requires only `name + email`; if `github` is present it must be a non-empty string. The renderer at `.github/scripts/weekly-flake-report.py` already handles a missing github via the `(GitHub handle: lookup needed)` fall-back. Routing today still resolves via the primary `contact` only -- `additionalContacts` is purely documentation, consumed by future tooling. Affected teams: `data-engineering` and `databricks-migration` (primary contact updated, Runtime Experience DG documented as additional contact for the `notebook-authoring` and `dbutils-to-notebookutils` sub-areas respectively); `eventstream` (primary contact replaced with the Fabric Eventstream AI Feature Team DG, `eventstreamaift@microsoft.com`). Validator extended in `tests/skill_ownership_manifest.py`; new test cases in `tests/test_skill_ownership_manifest.py`. The validator rejects an explicit `github: ""` on `additionalContacts` and (under v3) primary contact entries -- omit the key entirely when there is no GitHub handle (avoids ambiguous tri-state: missing / empty / set).
-- Mashup preview (`executeQuery` + `customMashupDocument`) for `dataflows-authoring-cli` — author-preview-save loop, eval cases, routing test
-- Programmatic connection creation in `dataflows-authoring-cli` (`POST /v1/connections`, credential type matrix, Key Vault `passwordReference`)
-- Query execution and Arrow stream parsing for `dataflows-consumption-cli` — `executeQuery` against persisted queries and `customMashupDocument`, embedded `{"Error":"…"}` failure detection, PowerShell + bash templates, quickref recipes
-- **Pair-level trigger-overlap detector** — `quality_checker.py` now compares the `Triggers:` field token sets of every skill pair via `find_trigger_overlap()`. Pairs where the smaller set is more than half-contained in the other (overlap > 0.5, both sets ≥ 3 triggers, `check-updates` excluded) are reported under a new `trigger_overlaps` key in `quality-report.json` as advisory WARNINGs. Catches the routing-collision class that the whole-description Jaccard matrix and the phrase-level `find_ambiguous_triggers` check miss by construction. Heuristic provenance: Azure/azure-sdk-tools `.github/skills/sensei` — we intentionally adopt only this heuristic, not the Ralph loop or autonomous mutation. Tests in `tests/test_trigger_overlap.py`; docs in `docs/quality-requirements.md` § Anti-Trigger Overlap.
-- **Structural `has_triggers_field` check** — `analyze_structural_compliance` now flags skills whose description omits the explicit `Triggers:` field that skill routers index on. Emitted as a normal structural WARNING (severity peer of `has_examples` / `has_must_prefer_avoid`); never blocks merge; `check-updates` exempted. Current catalogue passes uniformly.
-- **Output destination patterns for `dataflows-authoring-cli`** — new `references/output-destinations.md` covering Lakehouse Tables, Lakehouse Files, Warehouse, Azure Data Explorer, and Azure SQL. Includes `DataDestinations` annotation, hidden destination query patterns, `loadEnabled` rules, connection binding workflow, `ApplyChangesIfNeeded` refresh requirement, and complete worked examples. SKILL.md updated with Workflow D and new trigger phrases. Two smoke tests added.
 
 ### Changed
 - **Compatibility files** (`compatibility/CLAUDE.md`, `AGENTS.md`, `.cursorrules`, `.windsurfrules`) -- added pointers to the new MLV resources so cross-tool consumers route to the same guidance.
 - **`skills/dataflows-authoring-cli/SKILL.md`** — added a requirement to name the definition parts (`mashup.pq`, `queryMetadata.json`, `.platform`) in the written summary so they survive transcript truncation; condensed the connector-types note to keep the YAML description within the 1023-char limit.
-- **Skill catalog (`docs/skill-catalog.md`)** -- contributors no longer regenerate in feature PRs. The pre-commit hook's catalog-regeneration step is removed entirely (no stub kept -- the file is `cp`-installed into `.git/hooks/`, so re-installing is the upgrade path, not a runtime backward-compat hook). The `--check` gate is also removed from `quality-check.yml`. The catalog is refreshed automatically as part of `ReleaseScripts/CreateFullRelease.ps1` Step 2 (every release ships a fresh catalog); maintainers can also run `python .github/scripts/generate_skill_catalog.py` ad-hoc between releases. Per-PR conflict surface eliminated.
-- **Vally is now the primary PR and nightly behavioral harness.** `tests/run-vally-eval.ps1` + `tests/evals/<skill>/eval.yaml` replace `tests/run-smoke-tests.ps1` + `tests/tests.json` as the gating CI path. Legacy smoke remains as a manual-only break-glass runner; see `docs/legacy-smoke-break-glass.md`.
-- **All Vally evals scored at `threshold: 1.0`** (zero-tolerance pass bar). The previous `0.95` floor is gone.
-- **MCP service-principal cert auth integrated via Vally's native `environment.mcpServers`.** Evals depending on `powerbi-modeling-mcp` (e.g. `semantic-model-authoring`, `powerbi-report-*`) commit the interactive MCP block to `eval.yaml`; in CI, `tests/run-vally-eval.ps1` rewrites the staged copy to add `--authmode=serviceprincipal --skipconfirmation` plus the `AZURE_*` env block. Local dev runs unchanged stay interactive. This replaces the previous bespoke `Apply-McpCiOverlay.ps1` overlay (deleted) with first-class Vally MCP loader behaviour, including fail-fast on MCP load failure.
-- **`.github/workflows/fabric-smoke-vally.yml`** -- `summarise` job now also dot-sources the classifier / deep-link gatherer / emitter, writes the schema tree under `${GITHUB_WORKSPACE}/vally-schema-out`, and a new `if: always()` upload-artifact step ships it. Emission happens BEFORE the gating exits so a failing summarise still publishes the run to the dashboard (the dashboard's diagnostic value is highest on failing runs).
-- **`.github/workflows/fabric-smoke-ephemeral.yml`, `fabric-smoke-vally.yml`, `fabric-smoke-pr-touched.yml`, `fabric-full-eval-ephemeral.yml`, `fabric-full-eval-pr-touched.yml`, `fabric-cleanup-stale-workspaces.yml`, `dashboard-build.yml`** -- every external action invocation is now SHA-pinned with the trailing `# vX.Y.Z` comment Dependabot recognises (e.g. `actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1`). Scope is the 7 workflows that hold service-principal credentials, OIDC `id-token: write`, or non-`GITHUB_TOKEN` secrets.
-- **`.github/actions/vally-fabric-auth/action.yml`** -- pinned the composite's `azure/login@v2` floating tag to `azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0` so the privileged-surface pinning is not bypassed by a floating ref inside the composite that `fabric-smoke-vally.yml` and `fabric-cleanup-stale-workspaces.yml` invoke via `uses: ./.github/actions/vally-fabric-auth`.
-- Workflows outside the OIDC / non-`GITHUB_TOKEN` secret scope (`quality-check`, `daily-coverage-gap-report`, `security-audit`) stay on floating tags by design (they run only with `GITHUB_TOKEN`; lower triage cost wins). `secret-scan.yml` and `rai-prompt-security.yml` were already SHA-pinned on `main` and are unchanged. Reusable-workflow refs (`./.github/workflows/*.yml`) are unchanged -- they ride the branch SHA.
-- **`ReleaseScripts/PublishToPublic.ps1`** -- updated the `ExcludePatterns` entry from `.github/dependabot.yml.disabled` to `.github/dependabot.yml`. Same exclusion outcome (internal Dependabot config doesn't ship to the public mirror), but the path now points at a file that actually exists.
-- **`docs/compliance/REPO_GUARDRAILS.md`** -- removed Dependabot from the "Disabled Workflows" list (section 2.1.2) and from the "Dependency Management (disabled)" callout (section 6). Added an "Active dependency updates" callout that points at `.github/dependabot.yml`, references this PR, and notes the `github-actions`-only scope. PR-side dependency review (`dependency-review.yml.disabled`) remains correctly listed as disabled.
-- **`CONTRIBUTING.md`, `docs/skill-authoring-guide.md`** -- clarified the access-method discriminator status: `cli` is the shipping default, `mcp` is in limited use, and `sdk` / `portal` are **reserved with no shipping skills today**. Added a note that `-portal` is expected to land for UI-best workflows (some portal-only, some paired with a CLI counterpart) and that the first `-portal` or `-sdk` skill requires an issue + core-team sign-off before the PR, same governance bar as `-mcp`. Replaces the previous casual mention of `sqldw-authoring-portal` / `sqldw-authoring-sdk` as if they were ready-to-use examples.
-- **`docs/mcp-servers-guide.md`** -- added a top-of-doc note that the repo's MCP policy is remote-only, and tagged the historical local-stdio examples (`"command": "npx"`, `pip install mcp-server-*`) as illustrative-only rather than endorsed deployment patterns for new contributions.
-- **`.github/workflows/fabric-full-eval-pr-touched.yml`** -- two changes to make the run's outcome visible to reviewers:
-  1. **Fresh top-level comment per run** instead of the previous sticky-edit pattern. The marker (`<!-- fabric-full-eval-pr-touched -->`) is kept for grep-ability but the script no longer paginates `issues.listComments` to find-and-update; it always calls `issues.createComment`. Each comment header now includes the run number (linked) and the head-commit short SHA so reviewers can disambiguate runs at a glance in the Conversation timeline. Trade-off: more comments per PR during heavy push cycles; accepted while test infrastructure stabilises, with a planned migration to inline + resolvable threads once steady-state quality justifies a quieter pattern.
-  2. **Step-status mirror** added as the post-comment job's final step. Reads `needs.eval.result` and exits non-zero when the eval was `cancelled` or `failure`, so the chip on the run page reflects the actual outcome. Previously a cancelled eval still rendered post-comment as green `success` (since the comment was posted successfully), hiding the failure signal from anyone glancing at the Actions UI. `skipped` stays green because detect-declined / orchestrator-skipped is a legitimate no-op.
-
-- **`.github/workflows/fabric-full-eval-pr-touched.yml`** decision tree now has an explicit `cancelled` branch in the comment body so the rendered icon (`🟡`) and headline accurately reflect a queue-timeout / manual cancel scenario, instead of falling through to the generic `⚠️` "result: cancelled" arm.
-- **`ReleaseScripts/PublishToPublic.ps1`** -- Phase 1 also ends with a loud "run Phase 2 (`-PublishRelease -Version X`)" reminder and embeds the same instruction in the public content-PR body, because Phase 1 (content PR) and Phase 2 (tag + GitHub Release) are decoupled manual steps and skipping Phase 2 is what left the public repo without v0.3.2 / v0.3.3 release tags.
-- **`CONTRIBUTING.md`** -- added a line to the Questions section pointing contributors to the official Creator Copilot and Fabric Skills Teams channel for suggestions, requests for review, or help.
-- **PR-touched full-eval no longer escalates to run-all for eval plan-file edits.** `tests/select_plans_for_skills.py` maps `tests/full-eval-tests/plan/03-individual-skills` and `04-combined-skills` plan-file edits to the skill(s) they exercise instead of running the whole suite.
-- **PR-touched full-eval gate scoped to the touched skills' plans.** A new `gate_scope_plans` selector output is plumbed through `fabric-full-eval-pr-touched.yml` and `fabric-full-eval-ephemeral.yml` so a run-all (infrastructure) change hard-fails only on the PR's own skills, not on unrelated environmental bails in other plans.
-- **Per-source full-eval concurrency (mirrors `fabric-smoke-ephemeral.yml`).** The reusable workflow's shared-tenant concurrency group is now partitioned per PR / per event source (`fabric-full-eval-shared-tenant-<pr|event>`) instead of a single static group. Different PRs run concurrently, and a PR-touched run no longer cancels the queued nightly. Two `workflow_call` inputs (`caller-pr-number`, `caller-event-name`) are passed by the orchestrator; `cancel-in-progress` is true only for PR callers so a new push supersedes that PR's in-flight run. Safe on the single pinned capacity because PR-touched runs only the touched skills' plans.
-- **`pre-pr-check` skill defaults to a CI-equivalent workspace** -- Step 2 now provisions a fresh ephemeral workspace via `setup_test_env.py` (matching CI) by default instead of reusing the contributor's own workspace; the own-workspace path is demoted to a clearly-warned fast-iteration escape hatch with an explicit "do not default to this" agent directive, and Step 4 cleanup is corrected to delete the provisioned workspace.
-- **`pre-pr-check` skill L1+L2 framing** -- reframes Layer-1 / Layer-2 graders as MANDATORY for new evals and new stims (not an optional promotion), adds `tests/test_eval_yaml_structure.py` to the local pre-push checks, and points offline stims at `l1l2_exempt`.
-- **Renamed `powerbi-consumption-cli` → `semantic-model-consumption`** — Clarifies this skill's focus on raw DAX queries against semantic models via the `ExecuteQuery` MCP tool. The `-cli` suffix is dropped since this skill uses MCP server tools rather than CLI tools.
-- **Renamed `powerbi-authoring-cli` → `semantic-model-authoring`** and refactored it around semantic model development workflows. The skill now prioritizes MCP-based flows when available, while keeping full non-MCP guidance so it works in any environment.
-- **Expanded `synapse-migration` skill** — 11 new resource files covering full Synapse Spark → Fabric migration lifecycle (pool config, lake databases, HMS, notebooks, SJDs, libraries, validation, security, gotchas, orchestration, reporting). SKILL.md updated with API docs, gotcha quick-reference, post-migration guidance, and context loading guide.
-- **Compatibility files consolidated** — `compatibility/CLAUDE.md`, `compatibility/.cursorrules`, `compatibility/.windsurfrules`, and `compatibility/AGENTS.md` are now the single source of truth for user-facing AI-tool configs. The release flow flattens them to the public repo root (mirroring the `public/README.md → README.md` pattern), so end users get them automatically when cloning the public repo.
-
-### Removed
-- **`.github/skills/best-practices-check`** -- retired (subset of new `pre-pr-review`, 0 inbound refs).
-- **`.github/skills/skill-test`** -- retired (predates Vally, 0 inbound refs, content lives in `tests/full-eval-tests/README.md` + `docs/testing-guide.md`).
-- **`.github/scripts/check_validation_results.py` + workflow gate** -- removed entirely. The gate only checked the section heading existed, not content; the value lives in CONTRIBUTING guidance + the new pre-pr-review skill.
-- `tests/evals/powerbi-authoring-cli/` (skill consolidated into `semantic-model-authoring`).
-- `tests/vally-ci/Apply-McpCiOverlay.ps1` + `tests/vally-ci/Apply-McpCiOverlay.tests.ps1` -- superseded by native `environment.mcpServers` declarations in eval.yaml plus the in-wrapper `Add-CiPowerBiMcpAuthToStagedEval` helper.
-- **`.github/dependabot.yml.disabled`** -- legacy scaffolding from the previous disable cycle. Replaced by the active `.github/dependabot.yml` above.
-- **Stale root duplicates** — deleted internal-repo root `CLAUDE.md`, `.cursorrules`, `.windsurfrules`. They were drift-prone copies of `compatibility/`-equivalent files and served no contributor purpose. Root `AGENTS.md` is retained as a contributor-only file (see line 3 of `AGENTS.md`), matching the role of `.github/copilot-instructions.md` for Copilot.
-- Dropped `compatibility/**` from `package.json` `files` since the folder is no longer part of the public package layout.
-- **Deleted `.github/workflows/sync-to-public.yml`** — `ReleaseScripts/PublishToPublic.ps1` is now the single sync path. The workflow auto-fired on `release: published` while the PS1 (the documented "core-team responsibility" per `docs/plugins-guide.md`) is run manually, so both could race after `CreateFullRelease.ps1 -CommitAndPush` created a release tag. The PS1 also has `-DryRun` for safe preview, structured arrays, and clearer validation — none of which the workflow offered. One implementation eliminates both the race and the recurring drift between the two paths.
-- **`quality-report.json`** is no longer tracked. It is a generated artifact from `python .github/workflows/quality_checker.py` and is now produced fresh by CI, avoiding the recurring "report out of sync with current branch state" review noise.
 
 ### Fixed
-- **`ReleaseScripts/StampUnreleased.ps1`** -- three silent-corruption bugs:
-  - bullets containing `$&`, `$0`-`$9` are no longer interpreted as regex backreferences (now uses `MatchEvaluator`)
-  - duplicate `### Added` headings under `[Unreleased]` no longer get the new bullet inserted in both (the 4-arg `[regex]::Replace` `count` was actually `RegexOptions.IgnoreCase`)
-  - non-Kind `### Notes` / `### Migration` headings inside fragments now log a warning instead of being silently swallowed into the previous Kind body
-- **`tests/run-smoke-tests.ps1`** -- fixed pre-existing Windows PowerShell 5.1 incompatibility. The `Join-Path "$repoRoot" "plugins" "fabric-skills" "skills"` 4-arg call required `pwsh` (PS 7+'s `-AdditionalChildPath`) and failed under `powershell.exe` with "positional parameter not accepting 'fabric-skills'". Rewritten to use nested 2-arg form that works under both. Discovered while exercising `pre-pr-check` against a real skill change in PR #315.
-- **`pre-pr-check` SKILL.md + `docs/testing-guide.md`** -- updated all smoke / full-eval invocation examples from `powershell -File` (Windows PS 5.1, legacy) to `pwsh -File` (PS 7+, what CI uses + cross-platform default). Added a callout in pre-pr-check Step 2a explaining the requirement.
-- _(N/A -- this PR is additive.)_
-- **`CONTRIBUTING.md`** -- repaired escape-rot in three places where literal backslash-escaped backticks or asterisks had compounded across edits and rendered as garbage:
-  - Two rows of the "Warnings" and "Fixing Common Issues" tables (28-backslash blobs around literal triple-backticks); rewrote in plain prose.
-  - The "FabricAdmin agent" bold span in the workload-category callout (`\*\*` around a span containing backticks); restructured so the bold doesn't wrap a backticked span.
 - **Cross-tool config files** -- removed dead "see DEVELOPMENT-GUIDE.md at repository root" references (the file never existed) from `AGENTS.md`, `.cursorrules`, and `.windsurfrules`. `AGENTS.md` and `.windsurfrules` now inline the `az login` token steps the link was meant to provide, matching `CLAUDE.md`.
-- **CI** -- removed the `pull_request`/`push` `paths:` filter from `Skill PR Validation` (`.github/workflows/quality-check.yml`). As a required status check it must always report; the filter left PRs that touch only non-skill paths (compatibility/, docs/, ReleaseScripts/, ...) stuck on "Expected -- Waiting for status to be reported".
-- **Full-eval `copilot plugin uninstall` is no longer fatal.** `tests/run-full-tests.ps1` `Sync-PluginInstallation` now sweeps lingering MCP processes and retries the uninstall once instead of throwing; `plugin install` remains the real correctness gate. A flaky uninstall during the cosmetic post-processing plugin reset can no longer discard an otherwise-completed multi-hour run.
-- **Per-plan watchdog in the full-eval runner.** `tests/copilot-invoke.ps1` terminates a single Copilot plan invocation only on sustained inactivity (no run-log growth for a stall window, default 20 min) or a generous hard ceiling (default 60 min) -- never on a flat wall-clock timer, so a healthy-but-slow plan is not cut. Env-tunable via `FULL_EVAL_PLAN_STALL_MINUTES` / `FULL_EVAL_PLAN_HARD_CEILING_MINUTES`. A timed-out plan records `EVAL-TIMEOUT-001` (stall) / `-002` (ceiling) and the chain continues to the next plan.
-- **Suite-level soft budget.** `tests/run-full-tests.ps1` bounds the chain `Wait-Job` by a soft budget (default 270 min, env `FULL_EVAL_SUITE_SOFT_BUDGET_MINUTES`) and stops stragglers so telemetry and the merged summary are written before the 6h workflow hard timeout.
-- **CI** -- the "Pre-PR self-run prompt" in `Skill PR Validation` (`.github/workflows/quality-check.yml`) now fires when a PR is opened directly as a non-draft, not only on the draft -> ready transition. It was gated on the `ready_for_review` action, which a directly-opened PR never emits, so the most common contributor flow never received the reminder. It now also triggers on `opened` with `pull_request.draft == false`, matching the draft-state pattern the rest of the repo's draft-sensitive workflows already use. The step's idempotency guard keeps the prompt one-shot.
-- **`spark-authoring-cli` eval structure** -- the offline "MLV -- review query for incremental refresh readiness" stim now opts out via `l1l2_exempt`, restoring the eval-structure gate to green.
-- **`skills/activator-authoring-cli/references/action-types.md` and `SKILL.md` — UDF action `parameterType` and dynamic-parameter shape.** Three doc gaps that caused 400s when authoring UDF Fabric item actions: (1) the binding's `parameterType` must use Activator's canonical values `String` / `Number` / `Boolean` rather than the Fabric function metadata's Python `dataType` (`str` / `float` / `int` / `bool`) — the rule validator rejects raw Python type names. The prior doc telling authors to pass metadata values through unchanged was never end-to-end verified. New conversion table and an updated worked UDF binding example. (2) `AttributeReference` envelope inside `FabricItemParameter.parameterValue` differs from its envelope inside `ScalarSelectStep` / `DimensionalFilterStep`: `type: "complexReference"` with no `name` field vs `type: "complex"` + `name: "attribute"`. Added a contrast table. (3) `AttributeReference.entityId` inside `parameterValue` must resolve to a `BasicEventAttribute`; `IdentityPartAttribute` returns `400 Invalid TimeSeriesView payload.` with no useful hint. Also collapsed Step 6 in `SKILL.md` to a pointer that defers UDF-specific details to `action-types.md`. Validated end-to-end against real Fabric in eval-activator-authoring-plus-consumption ACA-10: rule update returned 200 and the readback round-tripped with `parameterType: "String"` / `"Number"` and the `complexReference` envelope.
-- **`skills/activator-authoring-cli/SKILL.md` and `skills/activator-consumption-cli/SKILL.md` — strengthen routing imperatives in both descriptions, expand trigger phrases.** Both descriptions changed from permissive *"Use when the user wants to: …"* to imperative `**Invoke this skill** whenever the user wants to: …`, and added an explicit `**Invoke this skill before asking clarifying questions / before answering questions**` directive so the agent delegates *before* it inlines the work itself. Authoring triggers expanded with `"create an activator"`, `"create a reflex"`, `"create an activator item"`, `"create an alert item"` to cover the `create-basic` smoke prompt's natural phrasing. Consumption triggers expanded with `"list alerts"`, `"list reflex items"`, `"show activator items"`, `"find activator named"` to cover the `list-baseline` smoke prompt's natural phrasing. The natural-language routing tests `activator-authoring-notify-me-routing`, `activator-authoring-create-basic`, and `activator-consumption-list-baseline` were intermittently failing because the agent recognized the request was Activator-related but answered inline or via direct `az rest` calls instead of formally invoking the skill (so the smoke harness's `expectedSkills` check saw no `● skill(activator-…-cli)` line). The previous permissive *"Use when"* phrasing read as *"this skill is suitable when X"* rather than *"you must invoke this skill when X"*; the new imperative phrasing biases the model toward delegation. No prompt-engineering workarounds in `tests/tests.json` — the tests keep user-realistic natural phrasing so they continue to verify routing health.
-- **`tests/tests.json` — `activator-authoring-notify-me-routing` `expectedResults`.** Relaxed from `["Activator", "rule"]` to `["Activator"]`. The prompt explicitly allows the agent to ask for event/action clarification rather than authoring a rule, but the previous `expectedResults` required both strings; the agent's clarification response contains "Activator" but not "rule", so the test could fail despite correct routing. The skill-routing check (`expectedSkills: ["activator-authoring-cli"]`) still enforces the test's stated intent.
-- **`tests/full-eval-tests/plan/03-individual-skills/eval-activator-authoring.md` — AAC-14 rubric.** Tightened the "dynamically sourced" assertion into explicit structural checks the LLM judge can verify from the decoded payload: canonical `parameterType` (`String` / `Number` / `Boolean`, not raw Python type names), `parameterValue.values` contains an `AttributeReference` / `EventFieldReference` part with `type: "complexReference"`, and the reference resolves to a `BasicEventAttribute` (not `IdentityPartAttribute`). Prevents a regression of the `str` / `float` claim landing without a deterministic eval signal again.
-- **`skills/databricks-migration/SKILL.md` and `resources/dbutils-to-notebookutils.md`** — corrected several inaccurate `notebookutils` capability claims so porting guidance no longer pushes users to abandon working migrations or hand-roll workarounds for APIs that already ship in `notebookutils`. Key fixes: `fs.mount/unmount/mounts` are supported (not "use OneLake Shortcuts only"), `fs.mv`/`fs.head` signatures and defaults differ from `dbutils` (not "identical"), `session.restartPython()` is the `dbutils.library.restartPython()` equivalent, runtime context keys are `currentWorkspaceId`/`currentNotebookId`/`activityId` (no `parameters` key), `dbutils.widgets` maps to parameter cells (not `runtime.context["parameters"]`). Added missing rows for `fs.exists`/`fs.fastcp`/`fs.getMountPath`/`fs.getProperties`, `credentials.getToken`/`putSecret`/`isValidToken`, `notebook.runMultiple`/`validateDAG`/CRUD, and `session.stop`. Each row verified against current Microsoft Learn `notebookutils` docs.
-- **`skills/check-updates/SKILL.md` — repair the broken update mechanism for 0.3.0+ users.** The Copilot CLI plugin install layout (`~/.copilot/installed-plugins/fabric-collection/fabric-skills/`) doesn't match what the skill assumed: it has no `package.json` (only `.github/plugin/plugin.json`) and no `.git/` directory, so Step 1 (read local version) and Method A (`git fetch origin main`) both silently fail there, forcing every plugin user through Methods B / C. The Update Commands section also pointed users at `./install.ps1` / `./install.sh`, which the 0.3.0 release intentionally removed from the public repo (excluded from the publish flow and stripped from the public `package.json`). Updated Step 1 to read whichever manifest is present, scoped Method A to git-clone installs only (with both `.git`-as-directory and `.git`-as-file working-tree shapes covered), replaced the install-script lines with `git pull`-only guidance, and added a "plugin renamed in 0.3.0" recovery note for users still on the old `skills-for-fabric@fabric-collection` plugin name (uninstall + reinstall as `fabric-skills@fabric-collection`).
-- **`marketplace.json` — restore `skills-for-fabric@fabric-collection` as a deprecated alias of `fabric-skills@fabric-collection`.** Pre-0.3.0 users have an installed-plugin record whose `name` is `skills-for-fabric`, but 0.3.0's marketplace renamed that id to `fabric-skills`. Their `/plugin update skills-for-fabric@fabric-collection` therefore fails its name lookup against the current marketplace and silently no-ops — they can never receive the SKILL.md fix above (or any future fix) via the normal update path. Added an `aliases` block to `build/marketplace.config.json` and a corresponding emitter in `build/build_plugins.py:generate_marketplace` that produces a duplicate `skills-for-fabric` entry pointing at `./plugins/fabric-skills` (same source as the canonical `fabric-skills` entry, with a deprecation prefix on its description). Verified empirically against a local marketplace fixture (3-phase test simulating the rename): `/plugin update <legacy-id>` first fails with `Plugin "<legacy-id>" not found in marketplace`, then succeeds with `v0.1.0 → v0.3.0` once the alias entry is published. The Copilot CLI marketplace.json schema (per `docs.github.com/en/copilot/reference/cli-plugin-reference#marketplacejson-fields`) imposes no uniqueness constraint on plugin entry names, so multiple entries pointing at the same `source` is supported behavior. The emitter also fail-fasts on alias misconfigurations: an alias whose `of` references an unknown plugin, an alias name colliding with a canonical plugin, or duplicate alias names.
-- **`package.json` — drop stale `install.ps1`, `install.sh`, `plugin.json` entries** from the `files` array (none of those files exist at the repo root anymore). Updated the `postinstall` message accordingly.
-- **Single release path** — eliminated the silent drift between `ReleaseScripts/PublishToPublic.ps1` and `.github/workflows/sync-to-public.yml` (the latter has now been deleted; see Removed). Previously they disagreed on whether to ship the internal `compatibility/` folder and which `CLAUDE.md` / `.cursorrules` / `.windsurfrules` were copied.
-- `tests/run-smoke-tests.ps1` and `tests/run-full-tests.ps1` — restored the full Azure Key Vault portal URL printed in the prerequisites banner. The `vaultResourceUri` and `vaultId` portal URL segments were missing from the `#view/...` fragment, causing the portal to return "missing the required parameter(s) 'vaultId, vaultResourceUri'" when contributors clicked the link to download the test certificate.
-- `.github/coverage-policy.yml` — removed the stale `spark-operations-cli` smoke allow-missing entry. PR #138 added three smoke tests for `spark-operations-cli` in `tests/tests.json` (`spark-operations-failed-notebook`, `spark-operations-pipeline-diagnosis`, `spark-operations-session-health`) but did not remove the matching exemption, which `coverage_enforcement.py` flagged as a stale tracked allowance on every subsequent PR.
-- **`tests/coverage_enforcement.py` — close stale-on-arrival exemption gap.** A new skill that ships with both coverage and an `allowMissing` entry would previously merge silently: the changed-skill path returned early on `has_coverage`, and the baseline stale check filtered out skills not present in `base_ref`. After merge, the now-visible stale entry then broke every subsequent PR until cleaned up. Added a violation in `_evaluate_coverage_requirement` that fires when `is_new_skill and skill_name in allow_missing_entries` and the skill has coverage, plus a regression test (`test_new_skill_with_coverage_cannot_keep_allow_missing_entry`) modeling PR #138's exact scenario (rename PR adding a new skill name, smoke tests, and a carried-forward exemption all in one change).
+
+## [0.3.3] - 2026-06-07
+
+### Added
+
+- **`powerbi-report-planning`** — guided requirements-to-implementation workflow for new Power BI reports and dashboards built from semantic models, datasets, or PBIP projects. Use to plan then implement a report end-to-end: define audience, scope, page plan, design direction, dependencies, and delivery target, then produce a locked report spec with explicit approval before any PBIR authoring begins. For direct authoring without the planning gate, invoke `powerbi-report-authoring` directly.
+- **`powerbi-report-design`** — visual design guidance for Power BI reports before any PBIR files are written. Use to choose tone, signature, page archetypes, chart types, layout, color, typography, theme direction, and accessibility approach; to redesign/restyle an existing report or apply a brand; or to critique chart and layout choices. Produces a design contract that downstream authoring consumes. Ships with 19 references covering accessibility, anti-patterns, page archetypes (analytical canvas, comparative benchmark, executive summary, narrative story, operational monitor), brownfield migration, chart selection, design brief, interactivity, pre-flight checklist, signatures, tone catalog, typography, and a visual cookbook.
+- **`powerbi-report-authoring`** — create and modify Power BI report files in PBIR/PBIP format using the `powerbi-report-author` and `powerbi-desktop` CLIs. Implements an approved report spec or design brief; adds or edits pages, visuals, filters, slicers, bookmarks, themes, and formatting; validates PBIR and verifies rendering in Power BI Desktop. Ships with 23 references covering authoring, cartesian charts, color strategy, conditional formatting, expressions, filter pane, filters, formatting (overview + details), image, page formatting, Power BI Desktop, the `powerbi-report-author` CLI, re-theming, screenshot review, shape, slicers, table, textbox, theming, and version control. For open-ended visual design choices, invoke `powerbi-report-design` first.
+- **`powerbi-report-management`** — manage Power BI report workspace items in Microsoft Fabric via `az rest` CLI against the Fabric REST API. Create reports from PBIR definitions, get or download report definitions, update report definitions or properties, list workspace reports, and delete reports. For report layout authoring (pages, visuals, filters, formatting), use `powerbi-report-authoring` instead.
+- **`powerbi-authoring` plugin bundle expanded** — the dedicated `powerbi-authoring` plugin now ships the four new `powerbi-report-*` skills alongside `semantic-model-authoring` and `check-updates`, with the `powerbi-modeling-mcp` server pre-configured. Reinstall via `/plugin install powerbi-authoring@fabric-collection` to pick up the new report skills.
+
+### Changed
+
+- **`semantic-model-authoring` DAX performance references refined** — added Microsoft Learn further-reading links for DAX engine tracing, horizontal fusion, and Direct Lake query performance in `dax-perf-decision-guide.md` and `dax-perf-patterns.md`; renamed scenario-specific DAX examples to use generic names; rewrote DAX examples to be self-contained so they're easier to read on their own.
+
+## [0.3.2] - 2026-06-03
+
+### Added
+
+- **`semantic-model-authoring`** — develop and manage Power BI semantic models across Power BI Desktop, PBIP projects, and the Fabric Service. Covers creating models (Import, DirectQuery, Direct Lake), editing measures/tables/columns/relationships, deploying to Fabric workspaces, refreshing, configuring data sources and permissions, and DAX performance optimization. Ships with 11 reference guides (connection binding, DAX guidelines, DAX performance decision guide, DAX performance patterns, Direct Lake guidelines, modeling guidelines, naming conventions, PBIP, semantic-model AI readiness, semantic-model REST API, TMDL guidelines). **Replaces `powerbi-authoring-cli`.**
+- **`semantic-model-consumption`** — execute raw DAX queries and inspect metadata of Microsoft Fabric Power BI semantic models via the MCP server `ExecuteQuery` tool. Use when you already know the DAX (EVALUATE statements) or need to inspect tables, columns, measures, relationships, and hierarchies via INFO functions. **Replaces `powerbi-consumption-cli`.**
+- **`fabriciq`** — answer business questions by querying Power BI reports and dashboards through the FabricIQ MCP endpoint. Orchestrates artifact discovery, schema inspection, entity-value resolution, DAX generation, and query execution; returns plain-language answers. Use for natural-language questions about Power BI report/dashboard content (use `semantic-model-consumption` for raw DAX).
+- **`FabricIQ` agent** — answers questions about Power BI artifacts (reports and semantic models) by discovering artifacts, inspecting metadata and schemas, resolving entity values, generating DAX, and executing queries against the Fabric MCP endpoint. Delegates to `fabriciq`.
+- **Dedicated `powerbi-authoring` plugin bundle** — ships `semantic-model-authoring` and `check-updates` with the `powerbi-modeling-mcp` server (`@microsoft/powerbi-modeling-mcp`) pre-configured for fine-grained semantic-model modeling operations. Install via `/plugin install powerbi-authoring@fabric-collection`.
+- **`dataflows-authoring-cli` reference docs (3 new)** — `output-destinations.md` (Lakehouse/Warehouse/SQL DB output destination patterns including staging behavior, schema mapping, and refresh semantics), `connection-management.md` (creating, binding, and rotating connection IDs for Dataflows Gen2), and `mashup-preview.md` (inspecting and validating Power Query M before publishing).
+- **`spark-operations-cli` automated diagnostic workflow** — new `references/automated-diagnostic-workflow.md` for end-to-end Spark/Livy diagnostics: job triage → executor/driver log mining → Spark Advisor findings → mitigation recommendations.
+- **`synapse-migration` deep resources (12 new)** — capacity sizing, connector refactoring, external Hive Metastore migration, feature parity matrix, lake database migration, library compatibility, migration gotchas, migration orchestrator, migration report, security and governance, Spark item migration, Spark pool migration, and validation/testing.
+- **`EVENTHOUSE-CONSUMPTION-CORE` common reference** — shared Eventhouse/KQL consumption patterns surfaced via the `fabric-authoring` plugin bundle.
+
+### Changed
+
+- **`powerbi-authoring-cli` renamed to `semantic-model-authoring`** — aligns the skill name with the underlying Microsoft Fabric / Power BI artifact (a *semantic model*) rather than the surface tool. Same coverage of model authoring plus an expanded reference library. Re-invoke as `semantic-model-authoring` going forward.
+- **`powerbi-consumption-cli` renamed to `semantic-model-consumption`** — same rationale; same DAX query / metadata surface. Re-invoke as `semantic-model-consumption` going forward.
+
+## [0.3.1] - 2026-05-10
+
+### Added
+
+- **`activator-authoring-cli`** — create alerts, notifications, and automated actions on Fabric data and events via Fabric REST API and `az rest` CLI. Covers Activator/Reflex item creation, trigger configuration, action wiring (Teams messages, emails, Fabric item runs), and connections to Eventhouse, Eventstream, Real-Time Hub, and Digital Twin Builder.
+- **`activator-consumption-cli`** — read-only inspection of existing Activator alerts, notifications, and automated actions via `az rest`. List alerts in a workspace, inspect alert configuration, decode `ReflexEntities.json` definitions.
+
+### Changed
+
+- **`spark-diagnostics-cli` renamed to `spark-operations-cli`** — aligned with the three-category naming convention (`-authoring-`, `-consumption-`, `-operations-`). Same skill, same diagnostic surface (failed Spark jobs, unhealthy Livy sessions, OOM/shuffle/skew, driver/executor logs, Spark Advisor findings) — only the name has changed. Re-invoke as `spark-operations-cli` going forward.
+
+### Fixed
+
+- **`/plugin update` now works again for users who installed under the legacy `skills-for-fabric@fabric-collection` id.** When the bundle was renamed in 0.3.0 (`skills-for-fabric` → `fabric-skills`), the old plugin id was dropped from `marketplace.json`, which silently broke `/plugin update skills-for-fabric@fabric-collection` for everyone still on the legacy id (`Plugin "skills-for-fabric" not found in marketplace`). The legacy id is restored as a deprecated alias of `fabric-skills@fabric-collection` — running `/plugin update` under either name now pulls the canonical `fabric-skills` payload. To migrate your installed entry to the canonical id (optional, recommended cleanup): `/plugin uninstall skills-for-fabric@fabric-collection` then `/plugin install fabric-skills@fabric-collection`.
+- **`check-updates` skill works inside Copilot CLI plugin installs.** The skill assumed a `package.json` and a `.git/` directory at the install root, but the Copilot CLI plugin install layout (`~/.copilot/installed-plugins/fabric-collection/fabric-skills/`) has neither — only `.github/plugin/plugin.json`. Step 1 (read local version), Step 2 (parse repository URL), and Method A (`git fetch origin main`) now read the manifest path that matches the actual install layout. The "Update Available" banner no longer references the `install.ps1` / `install.sh` scripts that were removed from the public release in 0.3.0.
 
 ## [0.3.0] - 2026-05-06
 
-### Changed
-- **Public release documentation** — public publishing now uses curated `public/README.md`, `public/CHANGELOG.md`, and `public/SECURITY.md` sources for the Microsoft repo while keeping the internal contributor-focused files private.
-- **Renamed `spark-diagnostics-cli` → `spark-operations-cli`** and expanded into comprehensive Spark diagnostics skill with automated 7-step triage workflow, Spark Monitoring API integration, pipeline run diagnosis (P1–P6), Tier 2 SHS escalation, and retention-expired fallback. 4 new reference files added: `diagnostic-workflow.md`, `pipeline-diagnosis.md`, `jobinsight-api.md`, `spark-history-server.md`.
-- **Renamed `sqldw-monitoring-cli` → `sqldw-operations-cli`** to align with the three-category governance (`-authoring-`, `-consumption-`, `-operations-`). Folder, SKILL.md `name:`, ownership manifest, agents, README, docs, compatibility files, and tests updated.
-- **Manifest-driven plugin builds (Stage 2 — partial)** — plugins are now declared via `plugins/<name>/plugin.json` manifests listing the skills, agents, and MCP servers each plugin includes. The materialized plugin trees (`plugins/<name>/{skills,agents,common,.mcp.json}`) are produced by `build/build_plugins.py` from the canonical `skills/`, `agents/`, `common/` sources and are gitignored — only the manifest is checked in. The `common/*.md` closure is auto-derived by parsing `../../common/X.md` references inside each included skill, so `common/` files no longer need to be hand-mirrored per plugin. CI workflow and marketplace generation deferred to a follow-up.
-- **Plugin installation granularity (Stage 1)** — each plugin now ships from its own self-contained source directory under `plugins/<name>/`, instead of all plugins sharing `"source": "./"`. Installing `fabric-authoring` no longer copies consumption skills (and vice versa). Internal repo files (`tests/`, `docs/`, `compatibility/`, `ReleaseScripts/`, dev configs) are no longer shipped to users.
-- Each plugin now carries its own `.mcp.json` scoped to the MCP servers it actually needs (`fabric-authoring` and `fabric-operations` are empty; `fabric-consumption` and `fabric-skills` keep `PowerBIQuery`).
-- Both `.claude-plugin/marketplace.json` and `.github/plugin/marketplace.json` updated to the new per-plugin `source` paths and remain byte-identical.
-- Version bumped to `0.3.0` to reflect the distribution change.
-- Updated `common/COMMON-CLI.md` — Added Catalog Search API as item discovery method alongside existing list-and-filter pattern
-- Updated `common/COMMON-CORE.md` — Added Catalog Search API spec and cross-workspace item resolution
-
 ### Added
-- New `skills/activator-authoring-cli/` — Create and manage Fabric Activator (Reflex) items, sources, rules, conditions, and actions via Fabric REST APIs and `az rest`.
-- New `skills/activator-consumption-cli/` — Inspect existing Fabric Activator items, definitions, sources, rules, conditions, and actions via read-only Fabric REST API calls.
-- New Activator smoke, individual eval, and combined eval coverage under `tests/`.
-- New `skills/dataflows-save-as-authoring-cli/` — Dataflows Gen1 → Gen2 CI/CD save-as authoring skill with 4-phase workflow (Readiness Assessment, Pre-flight Checks, Execute Save-As via `saveAsNativeArtifact` API, Post-Save-As Validation). Includes risk assessment framework for 7 signal types (incremental refresh, BYOSA storage, Power Automate triggers, pipeline dependencies, linked entities, DirectQuery, caller-not-owner), platform-specific gotchas (Windows az.cmd JSON output, envelope wrapping, idempotency), and end-to-end CLI recipes for tenant-wide and per-dataflow save-as operations. Included in `fabric-authoring` and `fabric-skills` plugin manifests.
-- New `skills/dataflows-save-as-authoring-cli/references/risk-assessment-guide.md` — Detailed detection logic, API calls, and classification criteria for 7 risk signals evaluated during readiness scan.
-- New `skills/dataflows-save-as-authoring-cli/references/upgrade-cli-quickref.md` — API reference for `saveAsNativeArtifact` (request/response, parameters, error codes), gotchas (inline body envelope wrapping, Windows az.cmd `-o json` failures, non-idempotency), and step-by-step save-as examples.
-- New eval test plan `tests/full-eval-tests/plan/03-individual-skills/eval-dataflows-save-as-authoring.md` with coverage for readiness scan accuracy, save-as success paths, error handling, and tenant-wide Admin API workflows.
-- New `fabric-operations` plugin — bundles `sqldw-operations-cli` (and `check-updates`) for users who only need diagnostics and performance investigation skills.
-- `powerbi-authoring-cli` is now declared in `fabric-authoring` and `fabric-skills` (previously only existed canonically in `skills/`).
-- `sqldw-operations-cli` is also included in the `fabric-skills` mega-bundle.
-- New `skills/search-consumption-cli/` — Search the OneLake catalog to find Fabric items by name, description, workspace name, or type via `az rest`
-- New `.github/skill-ownership.yml` manifest for repo ownership buckets across checked-in skills
-- New `docs/contributor-kit.md` contributor guide for ownership and coverage expectations
-- New `tests/test_skill_ownership_manifest.py` validation for keeping the ownership manifest in sync with checked-in skills
-- New `skills/spark-operations-cli/` (originally `spark-diagnostics-cli`) — Diagnostic skill for Spark job failure triage, Livy session health monitoring, and performance bottleneck analysis using Fabric REST APIs and GA Spark Monitoring APIs
-- New `common/SPARK-MONITORING-CORE.md` — Shared reference for GA Fabric Spark Monitoring APIs (Spark Advisor, Resource Usage, History Server, Driver/Executor Logs) used by all Spark skills
-- Updated `agents/FabricDataEngineer.agent.md` with `spark-operations-cli` delegation
-- Updated compatibility files (AGENTS.md, CLAUDE.md, .cursorrules, .windsurfrules) with diagnostic skill references
-- New `skills/synapse-migration/` — Migration skill for Azure Synapse Analytics → Microsoft Fabric. Covers `mssparkutils` → `notebookutils` API mapping, Linked Services → Data Connections/OneLake Shortcuts, Dedicated SQL Pool → Fabric Warehouse (T-SQL gaps, COPY INTO), Synapse Pipelines → Fabric Pipelines, and Spark pool configuration differences.
-- New `skills/hdinsight-migration/` — Migration skill for Azure HDInsight → Microsoft Fabric. Covers `HiveContext`/`SparkContext` → `SparkSession`, WASB/ABFS → OneLake path conversion, Hive DDL → Delta Lake / Lakehouse schemas, Oozie → Fabric Pipelines, and introducing `notebookutils` as net-new capability.
-- New `skills/databricks-migration/` — Migration skill for Databricks → Microsoft Fabric. Covers exhaustive `dbutils` → `notebookutils` API mapping (`fs`, `secrets`, `notebook`), widget → parameter cell replacement, `dbutils.library` → Fabric Environments, Unity Catalog → Lakehouse schema migration, Databricks Jobs → SJD, MLflow → Fabric ML Experiments, and Delta Sharing → OneLake Shortcuts.
-- New `agents/FabricMigrationEngineer.agent.md` — Migration orchestration agent for cross-platform workload migrations (Synapse/HDInsight/Databricks → Fabric). Defines 6-phase migration framework (Assessment → Architecture Mapping → Environment Setup → Code Migration → Validation → Cutover) and delegates to migration skills + authoring skills.
-- Updated `agents/FabricDataEngineer.agent.md` with delegation to `FabricMigrationEngineer` for all workload migration requests.
 
-- New `skills/eventhouse-consumption-cli/` — Read-only KQL queries against Fabric Eventhouse and KQL Databases via `az rest`
-- New `skills/eventhouse-authoring-cli/` — KQL management commands (table management, ingestion, policies, materialized views, functions) via `az rest`
-- New `common/EVENTHOUSE-CONSUMPTION-CORE.md` — KQL query patterns, operators, data types, performance best practices
-- New `common/EVENTHOUSE-AUTHORING-CORE.md` — KQL management command reference, policies, ingestion patterns, schema evolution
-- Updated `agents/FabricDataEngineer.agent.md` with KQL skill delegation
-- Updated compatibility files (AGENTS.md, CLAUDE.md, .cursorrules, .windsurfrules) with KQL patterns and skill references
-- New `agents/FabricDataEngineer.agent.md` data engineering orchestration agent for medallion resource guidance.
-- New `agents/FabricAdmin.agent.md` administration orchestration agent for capacity, governance, cost optimization, and workspace documentation.
-- New `agents/FabricAppDev.agent.md` application developer agents, for building applications connected to Fabric
-- **Consumer Skills**: `powerbi-consumption-cli`
-- **spark-authoring-cli**: New `resources/notebook-api-operations.md` resource — step-by-step CLI guide for reading and updating Fabric notebook content via REST API. Covers: `getDefinition`/`updateDefinition` full LRO flow, base64 encode/decode patterns, cell modification examples, and an end-to-end script.
-- **spark-authoring-cli** SKILL.md: Added 9 new TOC entries pointing to `notebook-api-operations.md` sections.
-- **SPARK-AUTHORING-CORE.md**: Added 4 new gotchas (#11–#14): HTTP 411 empty body, HTTP 400 `updateMetadata` flag, `getDefinition` `/result` suffix, and source line `\n` requirement. Added `getDefinition` read pattern to Quick Reference decision guide.
-- Hybrid architecture documentation updates describing Agents → Skills → Common layering and the skill-vs-agent decision framework.
-- New `skills/dataflows-authoring-cli/` — Create, update, and manage Fabric Dataflows Gen2 artifacts and Power Query M mashup definitions via CLI
-- New `skills/dataflows-consumption-cli/` — Explore, monitor, and query Fabric Dataflows Gen2 artifacts via CLI
-- New `common/DATAFLOWS-AUTHORING-CORE.md` — Dataflows Gen2 authoring patterns, REST API surface, definition structure, M code, connections, ALM
-- New `common/DATAFLOWS-CONSUMPTION-CORE.md` — Dataflows Gen2 consumption patterns, monitoring, parameters, definition exploration
-- New `skills/eventstream-authoring-cli/` — Create, configure, and deploy Fabric Eventstream real-time ingestion pipelines via CLI (20 source types, 7 operators, 4 destinations)
-- New `skills/eventstream-consumption-cli/` — List, inspect, and monitor Fabric Eventstream pipelines and topologies via CLI
-- New `common/EVENTSTREAM-AUTHORING-CORE.md` — Eventstream resource model, source/operator/destination catalogs, item definitions (base64 pattern), lifecycle APIs
-- New `common/EVENTSTREAM-CONSUMPTION-CORE.md` — Eventstream discovery, topology inspection, health monitoring, validation checklists
-- New `common/SPARK-NOTEBOOK-AUTHORING-CORE.md` — Shared Spark notebook authoring guidance: code generation approach, rules, module index with notebookutils API references
-- New `common/notebook-authoring/` module folder — 9 modules (context resolution, lakehouse paths/tables, connections, library management, ML workflow, notebook resources, troubleshooting)
-- New `docs/common-folder-guide.md` section documenting the module folder pattern for `common/`
+- **Plugin bundles for focused installation**
+  - `fabric-skills` - complete bundle for Fabric authoring, consumption, operations, migration, and end-to-end architecture workflows.
+  - `fabric-authoring` - developer-oriented skills for REST APIs, CLI automation, notebooks, T-SQL, KQL, Eventstreams, Dataflows Gen2, semantic models, and medallion architecture.
+  - `fabric-consumption` - read-only and interactive exploration skills for SQL, Spark/Lakehouse, Power BI semantic models, Eventhouse/KQL, Eventstreams, Dataflows Gen2, and catalog search.
+  - `fabric-operations` - diagnostics-focused bundle for warehouse performance investigation.
+- **Dataflows Gen2 skills**
+  - `dataflows-authoring-cli` for creating, updating, and managing Dataflows Gen2 definitions and Power Query M mashups.
+  - `dataflows-consumption-cli` for inspecting, monitoring, and exploring Dataflows Gen2 artifacts.
+  - `dataflows-save-as-authoring-cli` for Dataflows Gen1 to Gen2 save-as upgrade workflows, readiness assessment, risk checks, and validation.
+- **Real-Time Intelligence skills**
+  - `eventhouse-consumption-cli` for read-only KQL queries and schema discovery.
+  - `eventhouse-authoring-cli` for KQL table, ingestion, policy, function, and materialized-view management.
+  - `eventstream-consumption-cli` for inspecting and monitoring Eventstream topologies.
+  - `eventstream-authoring-cli` for creating and deploying Eventstream sources, transformations, and destinations.
+- **Search and discovery**
+  - `search-consumption-cli` for finding Fabric items across the OneLake catalog by name, description, workspace, and type.
+- **Migration skills**
+  - `databricks-migration` for Databricks to Fabric migration planning and code mapping.
+  - `synapse-migration` for Azure Synapse Analytics to Fabric migration.
+  - `hdinsight-migration` for Azure HDInsight to Fabric migration.
+- **Power BI authoring coverage**
+  - `powerbi-authoring-cli` is now included in the authoring and full bundles.
 
 ### Changed
-- Updated contributor and compatibility documentation to reflect agent-based orchestration in addition to skills.
-- Updated `agents/FabricDataEngineer.agent.md` with Dataflows skill delegation and `dataflows-save-as-authoring-cli` save-as delegation
-- Updated `agents/FabricAdmin.agent.md` with Dataflows skill delegation and Gen1→Gen2 save-as oversight delegation
-- Updated `marketplace.json` plugin bundles with Dataflows skills (including `dataflows-save-as-authoring-cli`)
-- Updated compatibility files (CLAUDE.md, .cursorrules, AGENTS.md, .windsurfrules) with Dataflows references (Gen1→Gen2 save-as patterns)
-- Clarified the contributor validation workflow with explicit pre-merge commands, a structured `Validation Results` format for PRs, and guidance on when to use the coverage gap report versus the smoke / full-eval runners.
-- Added blocking common-infra validation for shared auth/token guidance and shared `sqlcmd` setup guidance, plus encoding checks that now fail unreadable or mojibake-corrupted skill markdown files with matching semantic pytest coverage.
-- Added enforced new-skill coverage policy via `.github/coverage-policy.yml`, a fast PR validation workflow with one sticky summary comment, required `Validation Results` gating for skill PRs, skill-catalog sync checks, and security-report artifact fixes that remove noisy PR comments.
-- **spark-authoring-cli**: Added notebook cell code authoring capabilities (PySpark, Scala, SparkR, SQL) with new triggers and Rule 4 for notebook authoring
-- Updated `agents/FabricDataEngineer.agent.md` with notebook code authoring delegation to `spark-authoring-cli`
 
-## [0.1.6] - 2026-02-10
+- **Plugin installation is now bundle-scoped.** Installing `fabric-authoring`, `fabric-consumption`, or `fabric-operations` installs only the skills and resources for that bundle instead of copying the entire repository.
+- **Plugin packages are self-contained.** Public plugin folders include the materialized skills, agents, common references, and MCP configuration needed for GitHub-based plugin installation.
+- **MCP configuration is scoped per bundle.** `fabric-consumption` and `fabric-skills` include the Power BI query MCP server configuration; authoring and operations bundles do not include unused MCP configuration.
+- **`sqldw-monitoring-cli` was renamed to `sqldw-operations-cli`.** The new name aligns with the authoring, consumption, and operations skill categories.
+- **Catalog search is now part of item discovery guidance.** Skills can use the Fabric Catalog Search API alongside list-and-filter workflows.
+- **Version updated to `0.3.0`.**
 
-### Added
-- Skills compatibility test for validating skill routing and disambiguation
+### Available skills in this release
 
-### Changed
-- Updated plugins to version 0.1.6
+| Category | Skills |
+|----------|--------|
+| Authoring | `sqldw-authoring-cli`, `spark-authoring-cli`, `eventhouse-authoring-cli`, `eventstream-authoring-cli`, `powerbi-authoring-cli`, `dataflows-authoring-cli`, `dataflows-save-as-authoring-cli` |
+| Consumption | `semantic-model-consumption`, `fabriciq`, `sqldw-consumption-cli`, `spark-consumption-cli`, `eventhouse-consumption-cli`, `eventstream-consumption-cli`, `dataflows-consumption-cli`, `search-consumption-cli` |
+| Operations | `sqldw-operations-cli` |
+| Migration and end-to-end | `databricks-migration`, `synapse-migration`, `hdinsight-migration`, `e2e-medallion-architecture` |
+| Utility | `check-updates` |
 
-## [0.1.5] - 2026-02-09
+## Earlier releases
 
-### Added
-- Functional tests for the project
-- Skill routing tests replacing Fabric integration tests
-- Check for updates in Spark consumption skill
-
-### Changed
-- Renamed data-engineering skills to Spark
-- Refactored the plugins
-- Stricter semantic similarity thresholds (30% error, 20% warning)
-- Optimized skills with API parameterization and token reduction
-- Updated quality check for content review
-
-### Fixed
-- Updated .gitignore to exclude pycache files
-- Encoding issues and duplicate triggers
-- Livy endpoints with versioned paths and MSIT authentication
-
-## [0.1.4] - 2026-02-08
-### Added
-- Feature/data analyst odbc (#5)
-- Fabric Data Agent skills (dev and eval) (#2)
-
-### Changed
-- Enhance Data Engineering Skills: Session Management & Notebook Execution (#8)
-- Merge branch 'master' of https://github.com/gim-home/skills-for-fabric
-- Rename skill to spark-sql-odbc (#7)
-- Fabric Data Engineering Skills  + Comprehensive Security Infrastructure (#3)
-
-### Fixed
-- Repo path in README (#6)
-
-## [0.1.3] - 2026-02-07
-
-### Added
-- Fixed update command
-
-## [0.1.2] - 2026-02-07
-
-### Added
-- Automatic plugin updates
-
-## [0.1.0] - 2026-02-04
-
-### Added
-- Initial release of Microsoft Fabric Skills marketplace
-- **Developer Skills**: `sqldw-authoring-cli`
-- **Consumer Skills**: `sqldw-consumption-cli`
-- **End-to-End Skills**: tbd
-- **Update Checking**: Automatic update notifications at session start
-- Cross-tool compatibility (GitHub Copilot CLI, VS Code, Claude Code, Cursor, Windsurf, Codex/Jules)
-- Installation scripts for Windows (`install.ps1`) and Unix (`install.sh`)
-- MCP server registration scripts
-
-[Unreleased]: https://github.com/gim-home/skills-for-fabric/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/gim-home/skills-for-fabric/compare/v0.1.6...v0.3.0
-[0.1.6]: https://github.com/gim-home/skills-for-fabric/compare/v0.1.5...v0.1.6
-[0.1.5]: https://github.com/gim-home/skills-for-fabric/compare/v0.1.4...v0.1.5
-[0.1.4]: https://github.com/gim-home/skills-for-fabric/compare/v0.1.0...v0.1.4
-[0.1.3]: https://github.com/gim-home/skills-for-fabric/compare/v0.1.0...v0.1.3
-[0.1.2]: https://github.com/gim-home/skills-for-fabric/compare/v0.1.0...v0.1.2
-[0.1.0]: https://github.com/gim-home/skills-for-fabric/releases/tag/v0.1.0
+Earlier releases introduced the initial Fabric Skills marketplace, update checking, SQL data warehouse authoring and consumption skills, Spark skills, MCP setup scripts, and cross-tool configuration files.
