@@ -26,10 +26,10 @@ structurally valid. Use this loop:
 
 ### Setup
 
-Install the Desktop Bridge CLI globally:
+Ensure the latest Desktop Bridge CLI is installed globally:
 
 ```bash
-npm install -g @microsoft/powerbi-desktop-bridge-cli
+npm install -g @microsoft/powerbi-desktop-bridge-cli@latest
 powerbi-desktop --version
 ```
 

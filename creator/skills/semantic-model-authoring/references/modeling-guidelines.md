@@ -160,7 +160,7 @@ Calculated columns are evaluated during data refresh for every row. Use them spa
 - Create inactive relationships unless they are activated via `USERELATIONSHIP` in at least one measure. Inactive relationships without a corresponding measure are orphaned and suggest incomplete modeling.
 - Use `USERELATIONSHIP` against a table that also has Row-Level Security (causes errors).
 - Have multiple fact tables relate to the same dimension through different key columns without a shared conformed dimension - this causes slicers on one fact to not filter the other.
-- Set `isKey = true` on the primary key column of dimension tables for non Direct Query models.
+- Set `isKey = true` on the primary key column of dimension tables.
 
 ## Date/Calendar Table
 

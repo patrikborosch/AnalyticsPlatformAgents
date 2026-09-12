@@ -43,7 +43,8 @@ Use these visual types for axis-based charts that plot data against category
 and value axes. All share the `Category` + `Y` role pattern but differ in
 orientation, stacking, and line/marker support.
 
-> **Schema version rule:** Use `2.10.0` for new visuals (Desktop default as of release CY26SU05).
+> **Schema version rule:** Copy the `$schema` URL from an existing `visual.json` in the same report.
+> If no reference exists, fall back to `https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.9.0/schema.json`.
 > When editing existing visuals, **preserve the existing schema version** —
 > do not upgrade unless the task explicitly requires it.
 
