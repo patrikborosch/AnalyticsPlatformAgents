@@ -9,16 +9,10 @@ description: >-
   `powerbi-report-authoring`. For end-to-end requirements, approval, and build
   sequencing, use `powerbi-report-planning`. Triggers: "design Power BI report",
   "make dashboard look professional", "choose chart type", "apply brand to
-  report", "redesign report", "create design brief".
+  report", "redesign report", "create design brief", "Power BI report design archetype".
 metadata:
   version: 0.1.0
 ---
-
-> **Update Check — ONCE PER SESSION (mandatory)**
-> The first time this skill is used in a session, run the **check-updates** skill before proceeding.
-> - **GitHub Copilot CLI / VS Code**: invoke the `check-updates` skill.
-> - **Claude Code / Cowork / Cursor / Windsurf / Codex**: compare local vs remote package.json version.
-> - Skip if the check was already performed earlier in this session.
 
 # Power BI Report Design Skill
 

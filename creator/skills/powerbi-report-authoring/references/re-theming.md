@@ -272,7 +272,7 @@ results) or that need new properties added.
 
 | Visual Type | Key color properties to check | Details |
 |---|---|---|
-| `tableEx` / `pivotTable` | `columnHeaders.fontColor/backColor`, `values.fontColorPrimary/Secondary`, `values.backColorPrimary/Secondary` | [table.md](table.md) |
+| `tableEx` / `pivotTable` | `columnHeaders.fontColor/backColor`, `values.fontColorPrimary/Secondary`, `values.backColorPrimary/Secondary`, `rowTotal.fontColor/backColor`, `columnTotal.fontColor/backColor` | [table.md](table.md) |
 | `cardVisual` | `value.fontColor`, `label.fontColor`, `fillCustom` (all need `{ id: "default" }`) | [card.md](card.md) |
 | Bar/column/line charts | `categoryAxis.labelColor`, `valueAxis.labelColor`, `labels.color`, `gridlineColor` | [cartesian.md](cartesian.md) |
 | `azureMap` | `mapControls.defaultStyle` (enum), marker/bubble colors | [map.md](map.md) |
@@ -403,7 +403,7 @@ See [table.md § Style Presets](table.md#style-presets-for-tables).
 
 | Visual | What to set | Reference |
 |--------|-------------|-----------|
-| `tableEx` / `pivotTable` | `values.backColorPrimary/Secondary`, `columnHeaders.backColor/fontColor` | [table.md](table.md) |
+| `tableEx` / `pivotTable` | `values.backColorPrimary/Secondary`, `values.fontColorPrimary/Secondary`, `columnHeaders.backColor/fontColor`, `rowTotal.fontColor/backColor`, `columnTotal.fontColor/backColor` | [table.md](table.md) |
 | `cardVisual` | `fillCustom` with `{ id: "default" }` selector, `value.fontColor`, `label.fontColor` | [card.md](card.md) |
 | `shape` | `text.fontColor` (explicit — shapes with `text.show: true` but no `fontColor` inherit wrong color after polarity switch) | [shape.md](shape.md) |
 | `textbox` | `textRuns[].textStyle.color` per run | [textbox.md](textbox.md) |
@@ -415,7 +415,7 @@ backgrounds. Key properties per type:
 
 | Visual Type | Properties to verify |
 |---|---|
-| `tableEx` / `pivotTable` | `values.fontColorPrimary/Secondary`, `columnHeaders.fontColor` |
+| `tableEx` / `pivotTable` | `values.fontColorPrimary/Secondary`, `columnHeaders.fontColor`, `rowTotal.fontColor`, `columnTotal.fontColor` |
 | `cardVisual` | `value.fontColor`, `label.fontColor` (with `{ id: "default" }`) |
 | Charts | `categoryAxis.labelColor`, `valueAxis.labelColor`, `legend.labelColor` |
 | Slicers | `items.fontColor`, `header.fontColor` |

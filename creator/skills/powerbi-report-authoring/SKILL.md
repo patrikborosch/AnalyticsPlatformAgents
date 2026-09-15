@@ -14,12 +14,6 @@ metadata:
   version: 0.1.0
 ---
 
-> **Update Check — ONCE PER SESSION (mandatory)**
-> The first time this skill is used in a session, run the **check-updates** skill before proceeding.
-> - **GitHub Copilot CLI / VS Code**: invoke the `check-updates` skill.
-> - **Claude Code / Cowork / Cursor / Windsurf / Codex**: compare local vs remote package.json version.
-> - Skip if the check was already performed earlier in this session.
-
 > **CRITICAL NOTES**
 > 1. To find the workspace details (including its ID) from workspace name: list all workspaces and, then, use JMESPath filtering
 > 2. To find the item details (including its ID) from workspace ID, item type, and item name: list all items of that type in that workspace and, then, use JMESPath filtering
@@ -147,10 +141,11 @@ or older, install from [nodejs.org](https://nodejs.org/) or via your package
 manager — Windows: `winget install OpenJS.NodeJS.LTS`; macOS: `brew install node`;
 Linux: distro package or [nodesource](https://github.com/nodesource/distributions).
 
-Two CLIs. Install both globally:
+Before using the CLIs in a session, ensure the latest global versions are
+installed:
 
 ```bash
-npm install -g @microsoft/powerbi-report-authoring-cli @microsoft/powerbi-desktop-bridge-cli
+npm install -g @microsoft/powerbi-report-authoring-cli@latest @microsoft/powerbi-desktop-bridge-cli@latest
 ```
 
 Confirm both are on `PATH`:
@@ -190,10 +185,11 @@ A PBIP project on disk looks like this:
 
 | File | Purpose | Agent rule |
 |------|---------|------------|
+| `.platform` | Fabric/PBIP report item metadata | Keep it with the `.Report` folder |
 | `definition.pbir` | Report → semantic model binding via `byPath` or `byConnection` | Preserve schema/version unless intentionally migrating |
-| `version.json` | PBIR format metadata | Do not invent values; copy from an existing/scaffolded report |
+| `version.json` | PBIR format metadata | Preserve the full scaffolded file, including `$schema` |
 | `report.json` | Report-level settings, themes, resources | Edit through references and validate after changes |
-| `pages.json` | Page order and active page | Add every new page to `pageOrder` |
+| `pages.json` | Page order and active page | Add every new page to `pageOrder`; preserve `activePageName` |
 | `page.json` | Page metadata, size, filters | Preserve dimensions unless resizing is approved |
 | `visual.json` | Visual type, position, query, formatting | Validate roles and formatting with CLI metadata |
 | `localSettings.json` | User-local settings | Do not commit or rely on it |
@@ -259,6 +255,7 @@ migrate to the modern type and rebuild roles/formatting from CLI metadata.
 | Do not create | Use instead |
 |---|---|
 | `card` | `cardVisual` |
+| `multiRowCard` | `cardVisual` — use multi-value `cardVisual` (multiple projections in `Data`) for multiple KPIs |
 | `table` | `tableEx` |
 | `matrix` | `pivotTable` |
 | `map`, `filledMap` | `azureMap` |
@@ -293,6 +290,9 @@ validation, reload, and screenshot review are clean.
 - **Steps 3–5** — use `powerbi-desktop` CLI: `status` to choose the PID, then
   `reload --pid <pid>` for PBIP/PBIR current files and screenshots from the
   same PID. Then perform the screenshot review below.
+  After `status`, if the selected instance has `hasUnsavedChanges: true`, do
+  not reload yet; ask the user to save or discard their Desktop UI changes,
+  rerun `status`, and continue only once it is false.
   `reload` covers report/PBIR changes only. For semantic-model/TMDL changes,
   use a semantic-model skill or Modeling MCP and reopen the PBIP if changes are
   not reflected.
@@ -373,7 +373,7 @@ patterns. It does not replace Desktop reload and screenshot review.
 | Using `tableEx` with dimension columns and measures all in `Values` | Headers render but no data rows even when DAX confirms data exists | Use `pivotTable`; put dimensions in `Rows` and measures in `Values` |
 | Using PowerShell `ConvertTo-Json` to edit visual JSON | Property reordering, nesting depth truncation (`-Depth` default is 2) | Use Node.js for JSON manipulation, or always pass `-Depth 20` and verify structure |
 | Using regex or string replacement to modify JSON files | Corrupts nesting structure — properties end up inside sibling values, braces misalign | Read file → `JSON.parse` → modify object → `JSON.stringify` → write back. Or use the `edit` tool with exact old/new string matching |
-| `dataPoint.fill` without a selector on single-series charts | Bars/columns invisible despite data in tooltips | Use `dataPoint.defaultColor` for unselectored base color; `fill` requires a `metadata` selector |
+| `dataPoint.fill` without a selector on single-series charts | Bars/columns invisible despite data in tooltips | Use `dataPoint.defaultColor` for a base color without a selector; `fill` requires a `metadata` selector |
 | Using `dataPoint.defaultColor` on multi-series charts | All series/categories get the same color — no visual differentiation | Use theme `dataColors` for consistent palette across visuals, or `dataPoint.fill` with `metadata` selectors for per-series overrides — see [color-strategy.md § Color Strategy Quick Reference](references/color-strategy.md#color-strategy-quick-reference) |
 | Clustered bar/column chart colors collapse into one legend color | The visual has a Series role but all bars and legend markers share the same hue | Use per-series `dataPoint.fill` selectors or a theme `dataColors` palette; do not use `defaultColor` on clustered charts |
 | Relying on theme `dataColors` alone for cross-visual measure consistency | Same measure gets different colors on different visuals (index-based assignment varies with projection order) | Maintain a measure→color mapping and apply explicit `dataPoint.fill`/`defaultColor` per visual — see [color-strategy.md § Cross-Visual Measure-Color Consistency](references/color-strategy.md#pattern-cross-visual-measure-color-consistency) |
@@ -384,11 +384,14 @@ patterns. It does not replace Desktop reload and screenshot review.
 | Guessing which object a property belongs to | Wasted calls checking wrong objects one by one | Run `powerbi-report-author formatting search <type> <regex>` to grep across all objects at once |
 | Formatting property has no effect (no error) | Setting `show: false` on cardVisual outline without an id selector — validates but renders unchanged | Check `powerbi-report-author formatting describe-object <type> <object>` for `_selectorHint`; use the dual-entry pattern (static + id selector entries) |
 | Using `cardCalloutArea` on a single-value card | Properties validate but have no visible effect — `cardCalloutArea` only renders on multi-value cards (2+ measures in Data) | Use `outline`/`accentBar`/`fillCustom` with `{ id: "default" }` selector for single-value cards. For multi-value cards, `cardCalloutArea` controls per-callout tile styling — see [card.md § Multi-Value Formatting](references/card.md#multi-value-formatting) |
+| Using `"Fields"` as the `queryState` role for `cardVisual` | Cards render empty — PBI Desktop cannot resolve the binding. Validator reports `Unknown role "Fields"` and `Required role "Data" missing` | `cardVisual`'s only data role is `"Data"`. `"Fields"` is the legacy `card` visual's role name — never carry it over. Always verify role names with `powerbi-report-author catalog describe cardVisual` — see [card.md § Single-Value Template](references/card.md#single-value-template) |
+| Creating separate single-value `cardVisual` instances for multiple related KPIs | Wastes canvas space and misuses the visual type — `cardVisual` natively supports multiple projections in one tile | Default to one multi-value `cardVisual` with all measures as `Data` projections when ≥2 related KPIs are requested. Only use separate cards when per-card styling differences are required — see [card.md § When to Consolidate vs. Keep Separate](references/card.md#when-to-consolidate-vs-keep-separate) |
 | Adding multiple fields to button slicer Values or Label roles | Slicer breaks or shows unexpected results — each role accepts only 1 field | Put one field in Values, one in Label; additional fields go to Tooltips |
 | Looking at `filterConfig` on other visuals to understand slicer selections | Slicer selections live **only** inside the slicer's own `visual.json` via `expansionStates` + `objects.general.filter`. Always read `references/slicers.md` first when modifying slicers |
 | Creating an image visual without prompting for the source type | Wrong visual structure — URL vs local file vs data field each have different schemas and expression types | Always ask the user for the image source (local file / URL / data field) before creating the visual — see [image.md § Source Types Overview](references/image.md#source-types-overview) |
 | Creating a data-bound image visual with a field that lacks `dataCategory: ImageUrl` | Visual renders blank or error | **Warn the user first** — the visual will render blank without `dataCategory: ImageUrl`. Present alternatives (other ImageUrl fields, local file, URL) and confirm before creating — see [image.md § Select from data](references/image.md#3-select-from-data) |
 | Placing background image on page canvas instead of visual plot area | User asks for "background image" alongside a visual (e.g., "column chart with background image") but image is placed on `page.json → objects.background` instead of `visual.objects.plotArea` | When a background image is requested in the context of a specific visual, default to `plotArea.image`. Only use page-level `background.image` when the user explicitly says "page background" / "canvas background" or no visual context exists — see [image.md § Plot Area Background Image](references/image.md#plot-area-background-image-plotareaimage) |
+| Creating a `multiRowCard` visual | Legacy multi-row card — deprecated; `powerbi-report-author validate` warns with `PBIR_VISUAL_TYPE_DEPRECATED`. Often triggered by user phrases like "multi-card", "cards for each metric", or "card per measure" | Always use `cardVisual`. For multiple KPIs, use a single multi-value `cardVisual` with all measures as projections in the `Data` role — see [card.md](references/card.md#multi-value-template) |
 | Using `map` or `filledMap` instead of `azureMap` for map visuals | Legacy Bing Maps visuals — deprecated and must not be created; `powerbi-report-author validate` warns with `PBIR_VISUAL_TYPE_DEPRECATED` | Always use `azureMap` — see [map.md](references/map.md). If the map fails to render or geocode, debug the fields, try alternative geographic columns/coordinates, or ask the user — do **not** silently substitute a non-map visual without consulting the user first |
 | Creating `tableEx`/`pivotTable` without `columnAdjustment: growToFit` | Columns shrink-wrap to content, leaving unused whitespace | Always set `columnHeaders.columnAdjustment` to `growToFit` and `autoSizeColumnWidth` to `true` — see [table.md](references/table.md#default-rule--grow-to-fit) |
 | Custom table/matrix row colors with no effect (white background) | Default style preset overrides `objects`-level `backColorPrimary`/`backColorSecondary` | Set `stylePreset` VCO to `'None'` on every `tableEx`/`pivotTable` with custom colors — see [table.md § Style Presets](references/table.md#style-presets-for-tables) |

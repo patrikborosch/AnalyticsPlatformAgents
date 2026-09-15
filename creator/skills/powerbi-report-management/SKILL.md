@@ -1,15 +1,13 @@
 ---
 name: powerbi-report-management
-description: "Manage Power BI report workspace items in Microsoft Fabric via `az rest` CLI against the Fabric REST API. Use when the user wants to: (1) create reports from PBIR definitions, (2) get or download report definitions, (3) update report definitions or properties, (4) list workspace reports, (5) delete reports. For report layout authoring (pages, visuals, filters, formatting), use `powerbi-report-authoring`. Triggers: upload Power BI report, download PBIR definition, publish Power BI report to Fabric, manage Power BI reports."
+description: "Manage Power BI report workspace items and PBIR definitions in Microsoft Fabric via `az rest` CLI against the Fabric REST API. Use when the user wants to: (1) upload or publish a PBIR/report definition to Fabric, (2) get or download report definitions, (3) update report item definitions or properties, (4) list workspace reports, (5) delete reports. For editing PBIR files, pages, visuals, filters, themes, or formatting, use `powerbi-report-authoring`. For business questions over report data, use `fabriciq`. Triggers: upload PBIR report definition, upload Power BI report, download PBIR definition, publish PBIR definition, publish Power BI report to Fabric, manage Power BI reports, list workspace reports."
 metadata:
   version: 0.1.0
 ---
 
-> **Update Check — ONCE PER SESSION (mandatory)**
-> The first time this skill is used in a session, run the **check-updates** skill before proceeding.
-> - **GitHub Copilot CLI / VS Code**: invoke the `check-updates` skill.
-> - **Claude Code / Cowork / Cursor / Windsurf / Codex**: compare local vs remote package.json version.
-> - Skip if the check was already performed earlier in this session.
+> **Telemetry — MANDATORY.** Every `api.fabric.microsoft.com` call must carry
+> `x-ms-fabric-skill: powerbi-report-management` (`az rest`: `--headers "x-ms-fabric-skill=powerbi-report-management"`),
+> including every LRO poll, `fabric_lro` and retry. Snippets omit it — add it anyway.
 
 > **CRITICAL NOTES**
 > 1. To find the workspace details (including its ID) from workspace name: list all workspaces and, then, use JMESPath filtering

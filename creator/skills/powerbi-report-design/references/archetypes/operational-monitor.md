@@ -163,7 +163,7 @@ When the page is consumed by an on-call engineer working an active incident, the
 | Status tile | KPI state | `cardVisual` + `shape` + icon; CF drives color |
 | Heat strip | Time × entity state | `matrix` with background CF, suppress numbers |
 | Exception table | Alert queue | `tableEx` with CF icons + data bars, sort severity desc |
-| Maps | Spatial state | `azureMap` (preferred). If Azure Maps cannot render the geography (e.g., disabled by tenant policy or unsupported region), fall back to a non-map encoding such as a `tableEx` of locations with CF, or a `barChartClustered` by region — avoid the legacy `filledMap` / `shapeMap` visuals. |
+| Maps | Spatial state | `azureMap` preferred. If Azure Maps cannot render the geography because of tenant policy, region support, or environment constraints, use a non-map fallback such as a `tableEx` of locations with conditional formatting or a `clusteredBarChart` by region. Avoid the legacy `map` / `filledMap` visuals; `shapeMap` is a specialized shape-based visual, not a general Azure Maps substitute. |
 
 ### Do NOT Use
 
