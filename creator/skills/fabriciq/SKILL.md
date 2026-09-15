@@ -1,20 +1,7 @@
 ---
 name: fabriciq
-description: >
-  Answer business questions by querying Power BI reports and dashboards through the FabricIQ MCP endpoint.
-  Orchestrates: discover Power BI artifacts, inspect report/model schemas, resolve entity values, generate DAX, execute queries.
-  Returns plain-language answers from Power BI semantic models.
-  Use when the user asks a natural-language question about Power BI report or dashboard content (not raw DAX).
-  Triggers: "ask power bi", "PBI question", "discover report", "report data",
-  "dashboard data", "what are the top", "show me the power bi data",
-  "which products sold", "compare sales in report".
+description: "Answers natural-language business questions over existing Power BI reports and semantic models through the FabricIQ MCP endpoint, discovering artifacts, resolving entities, generating the DAX itself, and returning a plain-language answer. Use when the user asks a data question, including one that says to query the model directly. For DAX the user supplies, or measures to save, use semantic-model-authoring."
 ---
-
-> **Update Check — ONCE PER SESSION (mandatory)**
-> The first time this skill is used in a session, run the **check-updates** skill before proceeding.
-> - **GitHub Copilot CLI / VS Code**: invoke the `check-updates` skill.
-> - **Claude Code / Cowork / Cursor / Windsurf / Codex**: compare local vs remote package.json version.
-> - Skip if the check was already performed earlier in this session.
 
 > **CRITICAL NOTES**
 > 1. To find artifact details (including artifact ID) from a search query: use `DiscoverArtifacts` with the search term — do not call workspace/item list APIs

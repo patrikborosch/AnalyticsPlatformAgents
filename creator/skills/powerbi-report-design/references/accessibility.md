@@ -26,7 +26,7 @@
 | 2.1.1 | Keyboard | All functions keyboard-operable | Test full report with Tab, Enter, Escape only |
 | 2.4.3 | Focus Order | Focus sequence is logical | Tab order in Selection pane matches reading order |
 | 2.4.7 | Focus Visible | Focused element has visible indicator | PBI provides default focus ring; don't override with custom CSS |
-| 2.5.5 | Target Size | Interactive targets ≥24×24px | Ensure slicer items, buttons, headers meet minimum |
+| 2.5.8 | Target Size (Minimum) | Interactive targets ≥24×24px | Ensure slicer items, buttons, headers meet minimum |
 | 4.1.2 | Name, Role, Value | Interactive elements have accessible names | Use visual titles and alt text; avoid decorative-only visuals |
 
 ---
@@ -121,10 +121,10 @@ Ratio = (L_lighter + 0.05) / (L_darker + 0.05)
 | Foreground | Background | Ratio | AA Body | AA Large | AA Non-Text |
 |---|---|---|---|---|---|
 | `#333333` | `#FFFFFF` | 12.6 : 1 | ✅ | ✅ | ✅ |
-| `#3182BD` | `#FFFFFF` | 4.6 : 1 | ✅ | ✅ | ✅ |
-| `#6BAED6` | `#FFFFFF` | 2.6 : 1 | ❌ | ❌ | ❌ |
-| `#E15759` | `#FFFFFF` | 3.2 : 1 | ❌ | ✅ | ✅ |
-| `#FFFFFF` | `#08519C` | 8.1 : 1 | ✅ | ✅ | ✅ |
+| `#3182BD` | `#FFFFFF` | 4.2 : 1 | ❌ | ✅ | ✅ |
+| `#6BAED6` | `#FFFFFF` | 2.4 : 1 | ❌ | ❌ | ❌ |
+| `#E15759` | `#FFFFFF` | 3.7 : 1 | ❌ | ✅ | ✅ |
+| `#FFFFFF` | `#08519C` | 7.9 : 1 | ✅ | ✅ | ✅ |
 
 > Rule of thumb: mid-range hues on white often fail body-text contrast. Test every pair.
 
@@ -147,8 +147,8 @@ Ratio = (L_lighter + 0.05) / (L_darker + 0.05)
 |---|---|---|---|---|
 | Axis label | `#767676` | `#FFFFFF` | 4.5:1 | ✅ AA body |
 | Subtitle text | `#AAAAAA` | `#FFFFFF` | 2.3:1 | ❌ Fails all |
-| Chart bar fill | `#4E79A7` | `#FFFFFF` | 5.1:1 | ✅ AA non-text |
-| Card value | `#333333` | `#F2F2F2` | 10.1:1 | ✅ AAA |
+| Chart bar fill | `#4E79A7` | `#FFFFFF` | 4.6:1 | ✅ AA non-text |
+| Card value | `#333333` | `#F2F2F2` | 11.3:1 | ✅ AAA |
 
 **Process**: For every foreground/background pair in the design, compute or measure the ratio. Fix any pair below 3:1 for non-text, 4.5:1 for body text.
 

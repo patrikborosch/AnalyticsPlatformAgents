@@ -126,6 +126,14 @@ General rules applied to all slicers:
 2. The filter property under general in objects describes value selections.
 3. The expansionStates only available for hierarchy slicers and only needed when the slicer is expanded.
 4. identityKeys only defined on the first level of the hierarchy (the level whose nodes can be expanded to reveal children). Not defined on leaf levels.  identityValues defined inside root.children[] only when a specific node has been toggled open (expanded)
+5. Adding a field to the `Tooltips` queryState role is **necessary but not sufficient** to show tooltips. You must **also** set `visualContainerObjects.visualTooltip.show = true` — the tooltip panel is off by default and the user will see nothing on hover without it:
+   ```json
+   "visualContainerObjects": {
+     "visualTooltip": [
+       { "properties": { "show": { "expr": { "Literal": { "Value": "true" } } } } }
+     ]
+   }
+   ```
 
 With the theme applied, this template is complete for the **light variant**
 (border from theme, no fill). The theme handles header font, items font,
@@ -431,7 +439,7 @@ inside the `visual` object (sibling of `visualType`, `query`, `objects`):
 - Set the same `groupName` on each slicer you want synced (e.g. `"DateSync"`; any unique string works).
 - Typically set both `fieldChanges: true` and `filterChanges: true`.
 
-> **Note:** The published PBIR JSON schemas (`visualContainer/2.5.0–2.10.0`) do
+> **Note:** The published PBIR JSON schemas (`visualContainer/2.5.0–2.9.0`) do
 > not list `syncGroup`. However, the internal schema (`visualConfiguration/9999.0.0`)
 > does include it with full type definition. Desktop reads and writes it correctly.
 

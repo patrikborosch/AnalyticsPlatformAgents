@@ -63,7 +63,7 @@ Strong warnings surface to the user for explicit confirmation.
 | **Rainbow categorical** on ordered data | No perceptual order; readers can't decode high vs low | Sequential single-hue ramp (Blues, viridis) | `dataColors` with rainbow hues on a sorted dimension |
 | **Categorical palette on ordinal data** | Distinct hues imply no order; misleads on ranked data | Sequential or diverging palette | Categorical colors assigned to ordered field |
 | **Red/green as sole signal** | 8% of males are red-green CVD; information invisible | Add icon + text label alongside color | Red and green used without secondary channel |
-| **Low-contrast labels** | <3:1 ratio; unreadable on projectors and low-quality screens | Minimum `#767676` on white for body text | Text color with contrast ratio <4.5:1 |
+| **Low-contrast labels** | <4.5:1 body-text ratio; unreadable on projectors and low-quality screens | Minimum `#767676` on white for body text | Text color with contrast ratio <4.5:1 |
 | **Semantic color flip** | Green=bad violates universal convention; confuses everyone | Respect standard semantics; never invert | `good` theme color mapped to a negative outcome |
 | **Pastel for critical status** | Light pink doesn't signal urgency; fails to grab attention | Saturated red for critical; pastel only for context/background | Conditional format using pastel for "critical" threshold |
 | **>8 categorical hues** | Colors become indistinguishable; cognitive overload | Group tail categories into "Other"; limit to 7–8 | `dataColors` with >8 entries actively used |

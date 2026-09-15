@@ -14,12 +14,6 @@ metadata:
   version: 0.1.0
 ---
 
-> **Update Check — ONCE PER SESSION (mandatory)**
-> The first time this skill is used in a session, run the **check-updates** skill before proceeding.
-> - **GitHub Copilot CLI / VS Code**: invoke the `check-updates` skill.
-> - **Claude Code / Cowork / Cursor / Windsurf / Codex**: compare local vs remote package.json version.
-> - Skip if the check was already performed earlier in this session.
-
 # Power BI Report Planning Skill
 
 This skill orchestrates the full lifecycle for a new Power BI report:

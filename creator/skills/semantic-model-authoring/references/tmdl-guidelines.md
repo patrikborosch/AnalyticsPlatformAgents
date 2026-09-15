@@ -54,7 +54,7 @@ definition/perspectives/<Name>.tmdl     <- Perspectives
 The database file **must** start with a `database` object declaration (GUID or name), not a bare property:
 
 ```tmdl
-database 00000000-0000-0000-0000-000000000000
+database 7124f8d8-6199-44fe-b35d-7f7f06b3e1c6
 	compatibilityLevel: 1702
 	compatibilityMode: powerBI
 	language: 1033
@@ -190,7 +190,6 @@ relationship 'Sales - Ship Date to Date'
 - Hide foreign keys on fact tables (`isHidden: true`)
 - No composite keys - use a single surrogate integer key
 - No surrogate keys on fact tables - use natural keys where possible
-- Don't set `isKey = true` on the primary key column of dimension tables for non Direct Query models.
   
 ---
 
@@ -315,7 +314,6 @@ cultureInfo fr-FR
 - `translations` -> `model Model` -> table/column/measure nesting
 - Use `caption:` for display name, `description:` for tooltips
 - In `model.tmdl`, add `ref cultureInfo <locale>` for each culture
-- Do **not** include `linguisticMetadata` - it is auto-managed
 
 ---
 
