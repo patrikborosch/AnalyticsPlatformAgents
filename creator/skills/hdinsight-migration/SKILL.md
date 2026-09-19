@@ -1,27 +1,11 @@
 ---
 name: hdinsight-migration
-description: >
-  Port Azure HDInsight Spark clusters and Hive workloads to Microsoft Fabric.
-  Removes legacy HiveContext and standalone SparkContext constructors, replacing them with
-  the pre-instantiated SparkSession. Converts WASB and ABFS storage paths to OneLake
-  abfss URLs via Shortcuts. Transforms Hive DDL (STORED AS ORC, external tables) to
-  Delta Lake schemas inside Fabric Lakehouse. Maps Oozie workflow actions — spark, hive,
-  shell, sqoop, coordinator — to Fabric Pipeline activities and schedule triggers.
-  Introduces notebookutils for file and credential operations previously handled via
-  subprocess or HDFS client calls. Use when the user wants to:
-  (1) retire an HDInsight cluster and move to Fabric,
-  (2) convert WASB paths or Hive DDL,
-  (3) replace Oozie coordinators with Fabric Pipelines.
-  Triggers: "migrate from hdinsight", "hdi to fabric", "hivecontext sparksession fabric",
-  "wasb to onelake", "hive ddl to delta", "oozie to fabric pipelines",
-  "hive metastore lakehouse", "hdinsight spark migration".
+description: "Ports HDInsight Spark and Hive workloads to Fabric, converting HiveContext and SparkContext to SparkSession, WASB and ABFS paths to OneLake shortcuts, Hive DDL to Delta tables in a Lakehouse, and Oozie coordinators and actions to pipeline activities and triggers. Use when the source workload is HDInsight."
 ---
 
-> **Update Check — ONCE PER SESSION (mandatory)**
-> The first time this skill is used in a session, run the **check-updates** skill before proceeding.
-> - **GitHub Copilot CLI / VS Code**: invoke the `check-updates` skill.
-> - **Claude Code / Cowork / Cursor / Windsurf / Codex**: compare local vs remote package.json version.
-> - Skip if the check was already performed earlier in this session.
+> **Telemetry — MANDATORY.** Every `api.fabric.microsoft.com` call must carry
+> `x-ms-fabric-skill: hdinsight-migration` (`az rest`: `--headers "x-ms-fabric-skill=hdinsight-migration"`),
+> including every LRO poll, `fabric_lro` and retry. Snippets omit it — add it anyway.
 
 > **CRITICAL NOTES**
 > 1. To find workspace details (including its ID) from a workspace name: list all workspaces, then use JMESPath filtering
@@ -29,6 +13,7 @@ description: >
 > 3. HDInsight has no `mssparkutils` or `dbutils` equivalent — `notebookutils` is net-new capability being introduced
 > 4. `HiveContext` and `SQLContext` are legacy Spark 1.x/2.x APIs — Fabric uses Spark 3.x `SparkSession` exclusively
 > 5. `wasb://` paths are deprecated and require a Storage Account key or SAS — replace with OneLake shortcuts
+> 6. Fabric cannot read or shortcut `hdfs://` directly. Its Pipeline HDFS connector supports Anonymous authentication only; export or bridge Kerberos sources to supported storage first.
 
 # HDInsight → Microsoft Fabric Migration
 
@@ -40,8 +25,8 @@ Read these companion documents before executing migration tasks:
 - [COMMON-CLI.md](../../common/COMMON-CLI.md) — `az rest`, `az login`, token acquisition, Fabric REST via CLI
 - [SPARK-AUTHORING-CORE.md](../../common/SPARK-AUTHORING-CORE.md) — Notebook deployment, lakehouse creation, Spark job execution
 
-For notebook and Lakehouse creation, see [spark-authoring-cli](../spark-authoring-cli/SKILL.md).
-For Fabric Warehouse DDL/DML authoring, see [sqldw-authoring-cli](../sqldw-authoring-cli/SKILL.md).
+For notebook and Lakehouse creation, see [spark-cli](../spark-cli/SKILL.md).
+For Fabric Warehouse DDL/DML authoring, see [sqldw-cli](../sqldw-cli/SKILL.md).
 
 ---
 
@@ -110,7 +95,7 @@ Map Oozie workflow actions to Fabric Data Pipeline activities:
 | `<coordinator>` (time-based schedule) | **Pipeline schedule trigger** | Set recurrence in pipeline trigger; supports cron-like expressions |
 | `<coordinator>` (data-triggered) | **Storage Event trigger** | Trigger on OneLake file arrival |
 
-> **Delegate to `spark-authoring-cli`** for notebook and SJD creation after mapping pipeline activities.
+> **Delegate to `spark-cli`** for notebook and SJD creation after mapping pipeline activities.
 
 ---
 
@@ -153,6 +138,7 @@ HDInsight Spark had no built-in utility framework equivalent to `mssparkutils` o
 - **Introduce `notebookutils`** for file system operations, secret retrieval, and child notebook orchestration where HDInsight used custom scripts or direct API calls
 - **Replace Oozie XML workflows** with Fabric Data Pipelines — see [§ Oozie → Fabric Pipelines](#oozie--fabric-pipelines)
 - **Align library management** to Fabric Environments — remove `bootstrap.sh`, conda envs, and runtime `%pip install` patterns for production workloads
+- **Treat `hdfs://` as source-cluster-only** — export or ingest into ADLS Gen2 or OneLake; do not claim that a gateway adds Kerberos support to Fabric's Anonymous-only HDFS connector
 
 ### PREFER
 - **OneLake Shortcuts** over copying data — mount existing ADLS Gen2 containers as shortcuts to avoid re-ingestion during migration
