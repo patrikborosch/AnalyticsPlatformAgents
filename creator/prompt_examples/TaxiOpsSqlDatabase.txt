@@ -1,0 +1,5 @@
+Create a SQL database in Fabric called TaxiOps to hold operational data.
+
+Add tables for drivers, vehicles, and shifts with primary keys and the right foreign keys between them, a trigger that stamps a modified date on update, and a stored procedure to close out a shift.
+
+Then wire up source control for the database so I can commit the schema.
