@@ -117,6 +117,8 @@ Base URL: `https://api.fabric.microsoft.com/v1`
 
 All requests require `Authorization: Bearer <token>` and `Content-Type: application/json` for POST/PUT/PATCH.
 
+All requests **must also include the skill-attribution header** `x-ms-fabric-skill: <skill-name>`, where `<skill-name>` is the `name:` value from the calling skill's `SKILL.md` YAML frontmatter (verbatim — also the skill's directory name). This attributes the call to the originating skill for per-skill health and usage (MAU) telemetry; it carries only the skill identifier (no user data or PII) and never alters API behavior. It applies to `api.fabric.microsoft.com` calls only — not OneLake, SQL/TDS, or Kusto. For concrete `az rest`/`curl` examples see [COMMON-CLI.md § Skill Attribution Header](COMMON-CLI.md#skill-attribution-header--x-ms-fabric-skill-required-on-every-fabric-api-call).
+
 Useful response headers: `x-ms-request-id` (troubleshooting), `x-ms-operation-id` (LRO tracking), `Location` (LRO poll URL), `Retry-After` (wait time on 202/429).
 
 ### Catalog Search
