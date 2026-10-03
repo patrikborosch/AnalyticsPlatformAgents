@@ -10,14 +10,6 @@ It can include a Semantic Model + Report or just a Report (live connect).
 PBIPFolder/
 ├── [Name].SemanticModel/
 |   ├── /definition # The semantic model definition using TMDL language [REQUIRED]
-│   ├── Copilot/ # Copilot tooling [OPTIONAL]
-│   │   ├── Instructions/ # Contains the AI instructions configured for the semantic model, stored as a single markdown file.
-│   │   │   ├── instructions.md 
-│   │   ├── VerifiedAnswers/ # Contains the configured Verified answers for the semantic model, using PBIR format.
-│   │   │   ├── definitions/
-│   │   ├── schema.json # Contains the schema selection and field synonyms configured for the semantic model. 
-│   │   ├── settings.json # Contains top level Copilot tooling settings. 
-│   │   ├── examplePrompts.json # Contains zero prompts set up for the semantic model.
 |   ├── definition.pbism # The semantic model definition file [REQUIRED]
 |   ├── * # Other semantic model metadata files and folders
 ├── [Name].Report/        
@@ -117,91 +109,6 @@ Example of a `[name].pbip` file:
 ```
 
 Refer to [JSON Schema](https://github.com/microsoft/json-schemas/blob/main/fabric/pbip/pbipProperties/1.0.0/schema.json) for more details.
-
-## Copilot/Instructions/instructions.md
-
-```markdown
-# AI Instructions for Semantic Model
-
-## Business Context & Terminology
-- You are a sales analyst for a retail company analyzing sales performance, customer behavior, and product trends
-...
-```
-
-### Copilot/schema.json
-
-```json
-{
-  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/semanticModel/copilot/schema/1.0.0/schema.json",
-  "tables": [
-    {
-      "id": "[lineage tag]",
-      "name": "[Table name 1]",
-      "visibility": "Visible",
-      "columns": [
-        {
-          "id": "[lineage tag]",
-          "name": "[Column name 1]",
-          "visibility": "Visible",
-          "synonyms": ["[synonym 1]", "[synonym 2]"]
-        },
-        {
-          "id": "[lineage tag]",
-          "name": "[Column name 2]",
-          "visibility": "Hidden",
-          "synonyms": []
-        }
-      ],
-      "measures": [
-        {
-          "id": "[lineage tag]",
-          "name": "[measure name]",
-          "visibility": "Visible",
-          "synonyms": []
-        }
-      ],
-      "hierarchies": [
-        {
-          "id": "[lineage tag]",
-          "name": "[Hierarchy name]",
-          "visibility": "Visible",
-          "levels": [
-            {
-              "id": "[lineage tag]",
-              "name": "[Level name]",
-              "visibility": "Visible",
-              "synonyms": []
-            }
-          ],
-          "synonyms": []
-        }
-      ],
-      "synonyms": []
-    }
-  ]
-}
-```
-
-### Copilot/settings.json
-
-```json
-{
-  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/semanticModel/copilot/settings/1.0.0/schema.json",
-  "indexingEnabled": true
-}
-```
-
-### Copilot/examplePrompts.json
-
-```json
-{
-  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/semanticModel/copilot/examplePrompts/1.0.0/schema.json",
-  "prompts": [
-    "Top 5 customers by Sales Amount",
-    "Margin % by product category"
-  ]
-}
-```
 
 ## References
 
