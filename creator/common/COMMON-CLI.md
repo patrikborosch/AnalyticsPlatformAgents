@@ -29,6 +29,71 @@
 
 ---
 
+## Skill Attribution Header — `x-ms-fabric-skill` (Required on Every Fabric API Call)
+
+> **Requirement**: **Every** call you make to the Fabric REST API
+> (`https://api.fabric.microsoft.com/...`) — whether via `az rest` or `curl` —
+> **MUST** include the HTTP header **`x-ms-fabric-skill`** whose value is the
+> **name of the skill making the call**.
+
+**Where the skill name comes from** — use the `name` field from the calling
+skill's `SKILL.md` YAML frontmatter (the value on the `name:` line, which is
+also the skill's directory name). For example, a skill whose `SKILL.md` begins
+with:
+
+```yaml
+---
+name: activator-authoring-cli
+description: >
+  ...
+---
+```
+
+must send `x-ms-fabric-skill: activator-authoring-cli` on every Fabric API call.
+Use the value **verbatim** — do not translate, abbreviate, prettify, or add a
+version suffix.
+
+**Why**: the Fabric backend reads this header at the public-API gateway to
+attribute traffic to the originating skill. The value
+is a non-sensitive skill identifier only — never place user data, tokens, or
+PII in it.
+
+**Scope**: send it on control-plane calls to `api.fabric.microsoft.com` only.
+It is **not** needed for OneLake (`storage.azure.com`), SQL/TDS
+(`database.windows.net`), or Kusto calls, which do not traverse the Fabric API
+gateway.
+
+**How** — set the skill name once at the top of your shell session, then pass
+it on each request. `$SKILL_NAME` is **not** predefined by the environment: in a
+one-off command that lacks the assignment below, substitute your skill's literal
+`name:` value, or the shell expands it to an empty string and the call goes out
+unattributed.
+
+```bash
+# Take this literally from your SKILL.md `name:` field:
+SKILL_NAME="activator-authoring-cli"
+
+# az rest — add it via --headers (repeat/extend as needed):
+az rest \
+  --method get \
+  --resource "https://api.fabric.microsoft.com" \
+  --url "https://api.fabric.microsoft.com/v1/workspaces" \
+  --headers "x-ms-fabric-skill=$SKILL_NAME"
+
+# curl to the Fabric API — add it via -H:
+curl -s \
+  -H "Authorization: Bearer $FABRIC_TOKEN" \
+  -H "x-ms-fabric-skill: $SKILL_NAME" \
+  "https://api.fabric.microsoft.com/v1/workspaces"
+```
+
+A missing or empty header never changes API behavior or results — the call
+still succeeds, it is simply not attributed. So never abort, retry, or fail a
+request over it. Sending it is nonetheless **mandatory**: put it on every
+Fabric API call, without exception, so the skill's usage and health stay visible.
+
+---
+
 ## Finding Workspaces and Items in Fabric
 
 Most of your work will depend on finding items (artifacts) in Fabric.
@@ -192,6 +257,9 @@ Check key claims: `aud` (must match target resource), `exp` (Unix timestamp), `o
 
 All calls in this section correspond to COMMON-CORE.md Core Control-Plane REST APIs.
 The `--resource` parameter ensures `az rest` acquires the correct Fabric token.
+Every call must also carry the `--headers "x-ms-fabric-skill=$SKILL_NAME"` skill-attribution
+header, where `$SKILL_NAME` is your `SKILL.md` `name:` value — assign it first, or inline
+the literal name — see [§ Skill Attribution Header](#skill-attribution-header--x-ms-fabric-skill-required-on-every-fabric-api-call).
 
 ### Common Operations Reference
 
@@ -386,12 +454,15 @@ When an API returns `202 Accepted`, poll the `Location` header URL until a termi
 # Usage: fabric_lro POST "https://api.fabric.microsoft.com/v1/..." '{"body":"..."}'
 fabric_lro() {
   local METHOD="$1" URL="$2" BODY="$3"
+  # Skill attribution: set SKILL_NAME to your SKILL.md `name:` value before calling.
+  # If unset, the call is simply unattributed — never fail a request over a missing header.
   local TOKEN=$(az account get-access-token \
     --resource https://api.fabric.microsoft.com \
     --query accessToken --output tsv)
 
   local CURL_ARGS=(-si -X "$METHOD" "$URL" \
     -H "Authorization: Bearer $TOKEN" \
+    -H "x-ms-fabric-skill: $SKILL_NAME" \
     -H "Content-Type: application/json")
   [ -n "$BODY" ] && CURL_ARGS+=(-d "$BODY")
 
@@ -411,7 +482,9 @@ fabric_lro() {
   echo "LRO started, polling $OP_URL every ${RETRY}s..." >&2
   while true; do
     sleep "$RETRY"
-    local STATUS_JSON=$(curl -s "$OP_URL" -H "Authorization: Bearer $TOKEN")
+    local STATUS_JSON=$(curl -s "$OP_URL" \
+      -H "Authorization: Bearer $TOKEN" \
+      -H "x-ms-fabric-skill: $SKILL_NAME")
     local STATUS=$(echo "$STATUS_JSON" | jq -r '.status')
     echo "  status: $STATUS" >&2
     case "$STATUS" in
@@ -880,6 +953,7 @@ az rest \
   --method {get|post|put|patch|delete} \
   --resource "https://api.fabric.microsoft.com" \
   --url "https://api.fabric.microsoft.com/v1/{path}" \
+  --headers "x-ms-fabric-skill=$SKILL_NAME" \
   [--body @/tmp/body.json] \
   [--query "jmesPathExpression"] \
   [--output {json|table|tsv}]
@@ -888,6 +962,12 @@ az rest \
 **Never omit `--resource`** for Fabric API calls. This is the single most
 common mistake and produces a cryptic "Can't derive appropriate Azure AD
 resource" error.
+
+**Always include `--headers "x-ms-fabric-skill=$SKILL_NAME"`** on Fabric API
+calls, where `$SKILL_NAME` is the `name:` value from your `SKILL.md` frontmatter
+— assign it (`SKILL_NAME="<your-skill-name>"`) before the call, or inline the
+literal name; an unset variable expands to empty and loses the attribution
+(see [§ Skill Attribution Header](#skill-attribution-header--x-ms-fabric-skill-required-on-every-fabric-api-call)). It enables per-skill health and usage telemetry.
 
 ### Token Audience ↔ CLI Tool Matrix
 

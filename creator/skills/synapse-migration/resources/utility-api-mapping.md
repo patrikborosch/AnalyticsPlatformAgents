@@ -93,11 +93,11 @@ result = notebookutils.notebook.run(
 
 | `mssparkutils` | `notebookutils` | Notes |
 |---|---|---|
-| `mssparkutils.env.getJobId()` | `notebookutils.runtime.context["jobId"]` | Context dict replaces individual env getters |
-| `mssparkutils.env.getWorkspaceName()` | `notebookutils.runtime.context["workspaceName"]` | |
+| `mssparkutils.env.getJobId()` | `notebookutils.runtime.context["activityId"]` | Context dict replaces individual env getters; `activityId` is the Livy job ID |
+| `mssparkutils.env.getWorkspaceName()` | `notebookutils.runtime.context["currentWorkspaceName"]` | |
 | `mssparkutils.env.getUserId()` | `notebookutils.runtime.context["userId"]` | |
 | `mssparkutils.env.getUserName()` | `notebookutils.runtime.context["userName"]` | |
-| `mssparkutils.env.getNotebookPath()` | `notebookutils.runtime.context["notebookPath"]` | |
+| `mssparkutils.env.getNotebookPath()` | No direct path equivalent; use `notebookutils.runtime.context["currentNotebookName"]` or `notebookutils.runtime.context["currentNotebookId"]` for notebook identity | Fabric runtime context does not expose a `notebookPath` key |
 
 ```python
 # Synapse
@@ -105,9 +105,9 @@ workspace = mssparkutils.env.getWorkspaceName()
 
 # Fabric
 ctx = notebookutils.runtime.context
-workspace = ctx["workspaceName"]
-notebook_path = ctx["notebookPath"]
-job_id = ctx["jobId"]
+workspace = ctx["currentWorkspaceName"]
+notebook_name = ctx["currentNotebookName"]
+activity_id = ctx["activityId"]
 ```
 
 ---
