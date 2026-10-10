@@ -1,0 +1,5 @@
+Connect my FabricCLIDemo workspace to a Git repo and commit the current items.
+
+Then walk me through pulling a teammate's change and resolving it.
+
+Make sure my notebook and pipeline source files don't show phantom formatting-only diffs every time I sync.
