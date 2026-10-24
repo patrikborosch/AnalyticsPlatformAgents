@@ -83,10 +83,13 @@ Returns `fullyQualifiedNamespace`, `eventHubName`, and `accessKeys` (primary/sec
 ### Get Definition (Alternative)
 
 ```text
-GET /v1/workspaces/{workspaceId}/eventstreams/{eventstreamId}/definition
+POST /v1/workspaces/{workspaceId}/eventstreams/{eventstreamId}/getDefinition
 ```
 
-Returns the full topology as base64-encoded `eventstream.json` (and optionally `eventstreamProperties.json` and `.platform`).
+Returns the full topology as base64-encoded `eventstream.json` (and optionally
+`eventstreamProperties.json` and `.platform`). The request can return
+`202 Accepted`; poll the `Location` header until the long-running operation
+completes.
 
 **Decode workflow**:
 1. Extract the `payload` field from the `eventstream.json` part
@@ -127,19 +130,39 @@ Each node in the response includes a `status` field (`Running`, `Paused`, `Error
 
 ### Operational Control — Pause and Resume
 
-```text
+These endpoints mutate runtime state. A read-only consumer should inspect status
+through topology and route pause/resume requests to `eventstream-cli` authoring
+mode.
+
+Pause is bodyless:
+
+```http
 POST /v1/workspaces/{workspaceId}/eventstreams/{eventstreamId}/pause
+```
+
+Resume requires a JSON request body:
+
+```http
 POST /v1/workspaces/{workspaceId}/eventstreams/{eventstreamId}/resume
+Content-Type: application/json
+
+{
+  "startType": "WhenLastStopped"
+}
 ```
 
 Pause/resume all sources and destinations. Granular control per source or destination is also available:
 
 ```text
-POST .../pause/sources/{sourceId}
-POST .../resume/destinations/{destinationId}
+POST .../sources/{sourceId}/pause
+POST .../sources/{sourceId}/resume
+POST .../destinations/{destinationId}/pause
+POST .../destinations/{destinationId}/resume
 ```
 
-Requires `Eventstream.ReadWrite.All` scope.
+Resume operations require `startType` (`Now`, `WhenLastStopped`, or
+`CustomTime`); `CustomTime` also requires `customStartDateTime`. These write
+operations require `Eventstream.ReadWrite.All` or `Item.ReadWrite.All`.
 
 ### Eventstream Properties Check
 
@@ -206,7 +229,7 @@ Parse the decoded topology JSON to summarize the Eventstream's complexity:
 
 When an Eventstream routes data to an Eventhouse destination:
 - Data lands in a KQL table in the specified KQL Database
-- Use the `eventhouse-consumption-cli` skill to query the data with KQL
+- Use the `eventhouse-cli` skill to query the data with KQL
 - For direct ingestion mode, check the data mapping and ingestion health via KQL management commands
 
 ### Eventstream → Lakehouse
