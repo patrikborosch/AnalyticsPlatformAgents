@@ -36,19 +36,10 @@ TBLPROPERTIES ('orc.compress'='SNAPPY');
 
 -- AFTER — Fabric Spark SQL (Delta)
 -- Step 1: Create schema (maps to Hive database)
-CREATE SCHEMA IF NOT EXISTS sales;
+CREATE SCHEMA IF NOT EXISTS sales_db;
 
 -- Step 2: Create Delta table in schema
-CREATE TABLE IF NOT EXISTS sales.fact_orders (
-    order_id    BIGINT,
-    customer_id INT,
-    order_date  DATE,
-    amount      DECIMAL(18,2)
-)
-USING DELTA
-LOCATION 'Tables/sales/fact_orders';
--- Or simply (managed table; Fabric handles location):
-CREATE TABLE IF NOT EXISTS sales.fact_orders (
+CREATE TABLE IF NOT EXISTS sales_db.fact_orders (
     order_id    BIGINT,
     customer_id INT,
     order_date  DATE,
@@ -56,10 +47,21 @@ CREATE TABLE IF NOT EXISTS sales.fact_orders (
 ) USING DELTA;
 ```
 
+For an external Hive table backed by ORC or Parquet files, use the OneLake
+shortcut as the migration source, read the source format, and write a new Delta
+table. Do not declare `USING DELTA LOCATION 'Files/...'` over ORC or Parquet
+files; a Delta `LOCATION` is valid only when the target folder already contains
+Delta data and its transaction log.
+
+```python
+source_df = spark.read.format("orc").load("Files/hive-export/fact_orders/")
+source_df.write.format("delta").mode("overwrite").saveAsTable("sales_db.fact_orders")
+```
+
 ### Partitioned Table
 
 ```sql
--- BEFORE — Hive: partitioned ORC table
+-- BEFORE — Hive: partitioned Parquet table
 CREATE TABLE logs_db.app_logs (
     log_id   BIGINT,
     message  STRING,
@@ -69,7 +71,9 @@ PARTITIONED BY (log_date DATE, app_name STRING)
 STORED AS PARQUET;
 
 -- AFTER — Fabric: Delta with partitioning
-CREATE TABLE logs.app_logs (
+CREATE SCHEMA IF NOT EXISTS logs_db;
+
+CREATE TABLE logs_db.app_logs (
     log_id   BIGINT,
     message  STRING,
     severity STRING,
@@ -89,13 +93,13 @@ df.write.mode("overwrite").insertInto("sales_db.fact_orders")
 df.write.mode("overwrite").format("orc").saveAsTable("sales_db.fact_orders")
 
 # AFTER — Fabric: write as Delta to Lakehouse
-df.write.format("delta").mode("overwrite").saveAsTable("sales.fact_orders")
+df.write.format("delta").mode("overwrite").saveAsTable("sales_db.fact_orders")
 
 # Or with explicit partitioning
 df.write.format("delta") \
     .mode("overwrite") \
     .partitionBy("log_date", "app_name") \
-    .saveAsTable("logs.app_logs")
+    .saveAsTable("logs_db.app_logs")
 ```
 
 ---
@@ -148,12 +152,16 @@ Step-by-step migration of a Hive database to a Fabric Lakehouse schema:
 # Step 1: Create a schema in the Lakehouse (maps to Hive database)
 spark.sql("CREATE SCHEMA IF NOT EXISTS sales_db")
 
-# Step 2: For each Hive table, read from ADLS shortcut and write as Delta
-hive_tables = ["fact_orders", "dim_customer", "dim_product"]
+# Step 2: For each Hive table, read its source format from the ADLS shortcut and write as Delta
+hive_tables = {
+    "fact_orders": "orc",
+    "dim_customer": "parquet",
+    "dim_product": "parquet",
+}
 
-for table in hive_tables:
+for table, source_format in hive_tables.items():
     # Read from ADLS (via OneLake shortcut)
-    df = spark.read.parquet(f"Files/hive_export/{table}/")
+    df = spark.read.format(source_format).load(f"Files/hive-export/{table}/")
     
     # Write as Delta to Lakehouse schema
     df.write.format("delta").mode("overwrite").saveAsTable(f"sales_db.{table}")

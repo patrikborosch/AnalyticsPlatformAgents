@@ -1,0 +1,7 @@
+NYC taxi vehicles emit live trip events to an Azure Event Hub named taxi-telemetry.
+
+Create a Fabric Eventstream that ingests from that Event Hub, filters out trips with zero passengers, and routes the stream into an Eventhouse KQL database called TaxiRealtime.
+
+Then create an Activator rule that sends me a Teams alert whenever a borough's average tip percentage drops below 10% over a 15-minute window.
+
+Ask me which workspace to use before deploying.

@@ -11,14 +11,14 @@ Reference for migrating Databricks Unity Catalog namespace structures to Microso
 | Top-level container | **Catalog** (e.g., `prod`, `dev`) | **Lakehouse** (per-workspace item) | One Lakehouse ≈ one catalog in practice |
 | Namespace level 1 | **Schema** (database within catalog) | **Schema** (within a Lakehouse) | Direct equivalent — create with `CREATE SCHEMA` |
 | Namespace level 2 | **Table** | **Delta Table** in Lakehouse `Tables/` | Direct equivalent |
-| Full reference | `catalog.schema.table` | `schema.table` (within a Lakehouse context) | Fabric is 2-level; switch active Lakehouse for cross-lakehouse |
-| Cross-catalog access | `catalog2.schema.table` | Cross-lakehouse shortcut or explicit Lakehouse switch | Use OneLake shortcuts for cross-lakehouse table access |
+| Full reference | `catalog.schema.table` | `Lakehouse` + `schema.table` | The Lakehouse represents the source catalog; attach it as context or use a supported cross-Lakehouse reference |
+| Cross-catalog access | `catalog2.schema.table` | Cross-Lakehouse reference or OneLake Shortcut | Preserve catalog boundaries as Lakehouse boundaries by default |
 
 ---
 
 ## Mapping Strategy
 
-### Option A: One Lakehouse per Unity Catalog
+### Option A: One Lakehouse per Unity Catalog (recommended default)
 
 Best for: organizations with distinct catalogs for `dev`, `test`, `prod`, or `bronze`/`silver`/`gold`.
 
@@ -83,7 +83,7 @@ COMMENT 'Daily financial transactions'
 PARTITIONED BY (txn_date)
 TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true');
 
--- AFTER — Fabric (catalog removed; same Lakehouse assumed)
+-- AFTER — Fabric (ProdLakehouse represents the source catalog and is attached)
 CREATE TABLE IF NOT EXISTS finance.fact_transactions (
     txn_id      BIGINT NOT NULL,
     account_id  INT,
@@ -104,7 +104,7 @@ TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true');
 # BEFORE — Databricks: read from another catalog
 df = spark.sql("SELECT * FROM prod.silver.customers c JOIN staging.bronze.raw_events e ON c.id = e.customer_id")
 
-# AFTER — Fabric Option A: use Spark SQL with schema-qualified names (within attached Lakehouse)
+# AFTER — Fabric Option A: use schema-qualified names after attaching the mapped Lakehouse
 df = spark.sql("SELECT * FROM silver.customers c JOIN bronze.raw_events e ON c.id = e.customer_id")
 
 # AFTER — Fabric Option B: create a OneLake Shortcut to the other Lakehouse's table
@@ -137,7 +137,7 @@ Unity Catalog provides fine-grained RBAC, row filters, and column masks. Fabric 
 df = spark.read.table("prod.silver.customers")
 df.write.format("delta").mode("overwrite").saveAsTable("prod.gold.customer_summary")
 
-# AFTER — Fabric: 2-level (catalog prefix removed)
+# AFTER — Fabric: ProdLakehouse represents `prod`; preserve schema and table names
 df = spark.read.table("silver.customers")
 df.write.format("delta").mode("overwrite").saveAsTable("gold.customer_summary")
 ```
@@ -147,7 +147,7 @@ df.write.format("delta").mode("overwrite").saveAsTable("gold.customer_summary")
 spark.catalog.setCurrentCatalog("prod")
 spark.catalog.setCurrentDatabase("finance")
 
-# AFTER — Fabric: set current schema (catalog concept = active Lakehouse)
+# AFTER — Fabric: attach the mapped Lakehouse, then set the current schema
 spark.sql("USE finance")
 # To switch Lakehouse context, change the default Lakehouse attached to the notebook
 ```

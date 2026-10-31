@@ -8,9 +8,10 @@ Quick-reference summary of Synapse Spark features and their Fabric equivalents.
 |---|---|---|---|
 | Spark Pool (on-demand) | Starter Pool | ✅ Full | Auto-provisioned, no config needed |
 | Spark Pool (custom) | Custom Pool / Environment | ✅ Full | Node family + size + autoscale via Environment |
+| **Synapse Dedicated SQL Pool** | **Fabric Lakehouse** | ⚠️ **Partial; rewrite required** | Schema and executable code artifacts only; T-SQL semantics require explicit conversion and review. See [dedicated-pool-to-lakehouse.md](dedicated-pool-to-lakehouse.md). |
 | Pool-level libraries | Environment (libraries section) | ✅ Full | PyPI, Conda, custom .whl/.jar |
 | `mssparkutils.*` | `notebookutils.*` | ✅ Full | Namespace change only — see [utility-api-mapping.md](utility-api-mapping.md) |
-| `mssparkutils.env` | `notebookutils.runtime` | ⚠️ Renamed | `.env.getWorkspaceName()` → `.runtime.context["workspaceName"]` |
+| `mssparkutils.env` | `notebookutils.runtime` | ⚠️ Renamed | `.env.getWorkspaceName()` → `.runtime.context["currentWorkspaceName"]` |
 | Linked Services | Data Connections / Shortcuts | ⚠️ Redesigned | No 1:1 mapping — see [connectivity-migration.md](connectivity-migration.md) |
 | `spark.read.synapsesql()` | JDBC / OneLake shortcut | ⚠️ Replaced | Connector not available in Fabric |
 | Lake Database (built-in HMS) | Lakehouse (managed Delta) | ✅ Full | Tables → shortcuts, schemas supported |
@@ -49,7 +50,7 @@ Fabric Warehouse supports a broad T-SQL surface, but some Dedicated SQL Pool fea
 | Temp tables (`#temp`) | Supported | No change needed |
 | Window functions | Supported | No change needed |
 
-> **Delegate to `sqldw-authoring-cli`** for all T-SQL DDL/DML authoring tasks after mapping the workload.
+> **Delegate to `sqldw-cli`** for all T-SQL DDL/DML authoring tasks after mapping the workload.
 
 ## Spark Configuration Differences
 
