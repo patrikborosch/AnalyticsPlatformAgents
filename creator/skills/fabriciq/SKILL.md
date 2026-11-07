@@ -1,25 +1,12 @@
 ---
 name: fabriciq
-description: >
-  Answer business questions by querying Power BI reports and dashboards through the FabricIQ MCP endpoint.
-  Orchestrates: discover Power BI artifacts, inspect report/model schemas, resolve entity values, generate DAX, execute queries.
-  Returns plain-language answers from Power BI semantic models.
-  Use when the user asks a natural-language question about Power BI report or dashboard content (not raw DAX).
-  Triggers: "ask power bi", "PBI question", "discover report", "report data",
-  "dashboard data", "what are the top", "show me the power bi data",
-  "which products sold", "compare sales in report".
+description: "Answers natural-language business questions over existing Power BI reports and semantic models through the FabricIQ MCP endpoint, discovering artifacts, resolving entities, generating the DAX itself, and returning a plain-language answer. Use when the user asks a data question, including one that says to query the model directly. For DAX the user supplies, or measures to save, use semantic-model-authoring."
 ---
-
-> **Update Check — ONCE PER SESSION (mandatory)**
-> The first time this skill is used in a session, run the **check-updates** skill before proceeding.
-> - **GitHub Copilot CLI / VS Code**: invoke the `check-updates` skill.
-> - **Claude Code / Cowork / Cursor / Windsurf / Codex**: compare local vs remote package.json version.
-> - Skip if the check was already performed earlier in this session.
 
 > **CRITICAL NOTES**
 > 1. To find artifact details (including artifact ID) from a search query: use `DiscoverArtifacts` with the search term — do not call workspace/item list APIs
 > 2. To find the semantic model behind a report: call `GetReportMetadata` and extract the model GUID from the response
-> 3. When the user provides a Power BI URL: call `ResolveReportIdFromUrl` to get the correct report GUID before proceeding
+> 3. When the user provides a Fabric or Power BI URL, or a bare item GUID whose item type you do not already know: call `ResolveFabricItem` to get the canonical item identity before proceeding
 
 # Power BI Consumption — FabricIQ Skill
 
@@ -43,8 +30,8 @@ You help users analyze Power BI data. You orchestrate each step: discover artifa
 
 | Tool | Purpose |
 |------|---------|
-| `DiscoverArtifacts(searchQuery, artifactTypes?, maxResults?)` | Search for Power BI reports and semantic models by free text. Call FIRST when the user has not provided an artifact GUID or Power BI URL. Maximum 50 results. Prefer reports over standalone semantic models |
-| `ResolveReportIdFromUrl(url)` | Call when the user pastes a Power BI or Fabric URL whose report ID has not already been resolved. Required for workspace-App URLs (`.../groups/me/apps/<appId>/reports/<reportId>`) where the path-level reportId is the per-app instance ID, not the published-report GUID |
+| `DiscoverArtifacts(searchQuery, artifactTypes?, maxResults?)` | Search for Power BI reports and semantic models by free text. Call FIRST when the user has not provided an artifact GUID or a Fabric/Power BI URL. Maximum 50 results. Prefer reports over standalone semantic models |
+| `ResolveFabricItem(fabricItemId=<guid-or-url>)` | Resolve a Fabric or Power BI item to its canonical identity. Accepts a bare item GUID (preferred) or a supported artifact URL, and returns the canonical `fabricItemId`, `itemType`, `workspaceId` when known, and optional next-step instructions. Call when the user pastes a URL or supplies a raw GUID whose item type is not already known. Required for workspace-App URLs (`.../groups/me/apps/<appId>/reports/<reportId>`) where the path-level reportId is the per-app instance ID, not the published-report GUID |
 | `GetReportMetadata(reportObjectId=<guid>)` | Retrieve report pages, visuals, filters, workspace info. Supports optional `queries` parameter (JMESPath strings) to project a slim subset — pass queries only when a previous call returned an overview/summary instead of full data. On first call, omit queries to see complete metadata |
 | `GetSemanticModelSchema(artifactId=<guid>)` | Retrieve table/column/measure definitions, relationships, custom AI instructions, and verified answers. Supports optional `queries` parameter (JMESPath). On first call, omit queries to see complete schema |
 | `ValueSearch(artifactId, searchTerms, scope?)` | Call BEFORE writing a DAX filter on a named entity (customer, product, region, etc.). Returns the column + exact value to filter against so DAX does not guess canonical spelling |
@@ -58,7 +45,7 @@ You help users analyze Power BI data. You orchestrate each step: discover artifa
 - **Always follow Custom Instructions** — CustomInstructions from the semantic model are mandatory rules. Read them in full, apply them to every DAX query you write (e.g., default date filters, required measures, naming rules). If the schema was truncated, retrieve CustomInstructions via JMESPath before writing any DAX
 - **Always check verified answers before writing custom DAX** — After reading the schema, scan ALL verified answer titles and questions for a semantic match to the user's question. If a match exists, use it. Do not write ad-hoc DAX when a verified answer covers the same intent
 - **Source-bound** — never invent facts or use external data; rely only on Power BI artifacts
-- **Always discover first** — call `DiscoverArtifacts` unless you already have the artifact ID
+- **Always discover first** — call `DiscoverArtifacts` unless you already have the artifact ID, or the user gave a Fabric/Power BI URL or an unidentified GUID, in which case call `ResolveFabricItem` first
 - **Never invent data** — only use results from tools
 - **Lean analysis DAX** — aggregate and filter early; prefer the smallest row set that suffices
 - **Insights over structure** — when users ask to "summarize a report", they want data insights, not layout descriptions. Always run queries to get actual data
@@ -80,7 +67,7 @@ You help users analyze Power BI data. You orchestrate each step: discover artifa
 ## Workflow
 
 1. **Identify the artifact** —
-   - If the user shares a Power BI URL, call `ResolveReportIdFromUrl(url)` unless the platform already pre-registered the artifact as `[rpt_N]` / `[dataset_N]` (in which case use that GUID directly). `ResolveReportIdFromUrl` is the only reliable way to map a workspace-App report URL to the underlying published-report GUID
+   - If the user shares a Fabric or Power BI URL, call `ResolveFabricItem(fabricItemId=<url>)` unless the platform already pre-registered the artifact as `[rpt_N]` / `[dataset_N]` (in which case use that GUID directly). `ResolveFabricItem` is the only reliable way to map a workspace-App report URL to the underlying published-report GUID. It also accepts a bare item GUID — use it when the user supplies an ID but you do not know whether it is a report or a semantic model, then follow the `itemType` and any next-step instructions in the response
    - Otherwise call `DiscoverArtifacts(searchQuery=<keywords from user request>)`
    - If multiple strong candidates exist, surface them and ask the user to pick
    - For "list all my reports" enumeration intents (no specific keyword), call `DiscoverArtifacts` with a broad term — tell the user the result is the top matches, not exhaustive

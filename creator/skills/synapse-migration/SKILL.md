@@ -1,314 +1,129 @@
 ---
 name: synapse-migration
-description: >
-  Port Azure Synapse Analytics Spark workloads to Microsoft Fabric.
-  Translates mssparkutils calls to notebookutils (including the env→runtime namespace change),
-  replaces Linked Services with Fabric Data Connections and OneLake Shortcuts.
-  Covers Spark Pools, Lake Databases, Notebooks, and Spark Job Definitions.
-  Use when the user wants to:
-  (1) port Synapse Spark notebooks to Fabric Lakehouse or Spark Job Definitions,
-  (2) replace mssparkutils or Linked Services in Synapse code.
-  Triggers: "migrate from synapse", "synapse to fabric", "mssparkutils to notebookutils",
-  "synapse linked service replacement", "port synapse notebooks", "synapse workspace migration".
+description: "Converts Synapse workspaces to Fabric: Spark items, Lake Databases, Linked Services, and Dedicated SQL Pool schema/procedures for Lakehouse or Warehouse. During Pool-to-Lakehouse migration only, can migrate approved dependent procedure callers after notebook readiness. Excludes standalone pipelines and Warehouse administration. Triggers: Synapse workspace to Fabric, Dedicated SQL Pool to Lakehouse, Dedicated SQL Pool to Fabric Warehouse."
 ---
 
-> **Update Check — ONCE PER SESSION (mandatory)**
-> The first time this skill is used in a session, run the **check-updates** skill before proceeding.
-> - **GitHub Copilot CLI / VS Code**: invoke the `check-updates` skill.
-> - **Claude Code / Cowork / Cursor / Windsurf / Codex**: compare local vs remote package.json version.
-> - Skip if the check was already performed earlier in this session.
+> **Telemetry — MANDATORY.** Every `api.fabric.microsoft.com` call must carry
+> `x-ms-fabric-skill: synapse-migration` (`az rest`: `--headers "x-ms-fabric-skill=synapse-migration"`),
+> including every LRO poll, `fabric_lro` and retry. Snippets omit it — add it anyway.
+
+> **OFFLINE LAKEHOUSE ARTIFACT FAST PATH — DECIDE FIRST.** For a no-live-call request with complete supplied inputs and contracts, load only the [fast path](resources/dedicated-pool-to-lakehouse.md#offline-lakehouse-artifact-fast-path); do not load `migration-planning-reference.md`, `dedicated-pool-conversion.md`, or implementation scripts. Use one generator for artifacts and final-byte hashes, then one verifier. Do not inspect generated files or run post-pass spot checks. For every optional non-null source default, set `missingValueBehavior` to `UseSourceDefault` and restore that default before validation. Do not use this path for a Warehouse target; incomplete and large-procedure requests use their own routes.
 
 > **CRITICAL NOTES**
-> 1. To find workspace details (including its ID) from a workspace name: list all workspaces, then use JMESPath filtering
-> 2. To find item details (including its ID) from workspace ID, item type, and item name: list all items of that type in that workspace, then use JMESPath filtering
-> 3. `mssparkutils` and `notebookutils` share the same API surface in most cases — the namespace is the primary change
-> 4. Linked Services have no direct REST API equivalent in Fabric — they are replaced by Data Connections (for external sources) and OneLake Shortcuts (for storage mounts)
+> 1. To find workspace details (including its ID) from a workspace name: list all workspaces, then use JMESPath filtering.
+> 2. To find item details (including its ID) from workspace ID, item type, and item name: list all items of that type in that workspace, then use JMESPath filtering.
+> 3. Treat a source Dedicated SQL Pool as read-only. Do not run source DDL, DML, stored procedures, or create sample objects.
+> 4. Dedicated Pool-to-Lakehouse data movement is out of scope. Migrate schema and executable code artifacts only; do not copy source rows or run row-level/business-result equivalence queries. The separate Warehouse route may move data only from a separately approved restored export copy under its own consent gate and restored-source contract.
+> 5. For Dedicated Pool-to-Lakehouse requests, complete gap assessment, explicit mapping approval, manifest creation, conversion, deployment, and validation in order. Read [dedicated-pool-to-lakehouse.md](resources/dedicated-pool-to-lakehouse.md) once as the router, then load only the current phase reference.
+> 6. Stored-procedure `1:1`, `N:1`, and `N:N` mappings never apply to views. Views remain schema objects; procedures become traceable Spark SQL notebooks with executable `%%sql` transformation cells.
+> 7. Dependent ADF/Synapse callers are conditional scope, not automatic scope. Discover them during assessment, require a separate complete-closure approval, and migrate them only after notebook readiness. Route standalone pipeline requests to `pipeline-migration`.
+> 8. Before executing a specialized Dedicated Pool workflow, read the matching contract in [dedicated-pool-execution-contracts.md](references/dedicated-pool-execution-contracts.md). Its validation, hashing, request-body, resume, and completion-language requirements are mandatory.
+> 9. Keep Lakehouse and Warehouse paths separate. If the target is unclear, ask before loading path-specific resources. Lakehouse conversion never moves source rows; Warehouse data migration requires its own explicit consent gate and restored-source contract.
+> 10. For a Fabric Warehouse target, explicitly state that the complete `DISTRIBUTION` and `CLUSTERED COLUMNSTORE INDEX` declarations are removed because Fabric manages distribution, storage, and indexing; a bare mention of either source clause is insufficient.
+> 11. Run setup DDL and CETAS only against the separately approved restored export copy after proving it is not the original production source.
 
-# Synapse Analytics → Microsoft Fabric Migration
+# Synapse Analytics to Microsoft Fabric Migration
 
-## Prerequisite Knowledge
+## Core Workflow
 
-These companion documents provide general Fabric REST patterns. **Do NOT read them upfront** — reference only when a specific phase requires a pattern not already covered in this skill's resource files:
+1. **Discover** the Synapse workspace and classify every source artifact.
+2. **Choose targets** using [workload-routing.md](references/workload-routing.md).
+3. **Assess gaps before conversion**, including runtime, library, connectivity, T-SQL, security, and capacity constraints.
+4. **Obtain approval** for behavior-changing decisions, target placement, and every stored-procedure-to-notebook mapping.
+5. **Create or update `migration-manifest.json`** and persist approval, per-object status, hashes, and checkpoints atomically.
+6. **Convert and deploy in dependency order**, loading only the current phase resource.
+7. **Validate persisted definitions and artifacts** without executing generated notebooks or pipelines unless a separately approved workflow explicitly requires execution.
+8. **Report** completed, blocked, skipped, and pending objects without exposing credentials or sensitive values.
 
-- [COMMON-CORE.md](../../common/COMMON-CORE.md) — General Fabric REST API patterns, authentication & token audiences, item discovery via JMESPath
-- [COMMON-CLI.md](../../common/COMMON-CLI.md) — `az rest` / `az login` CLI patterns, authentication recipes
-- [SPARK-AUTHORING-CORE.md](../../common/SPARK-AUTHORING-CORE.md) — Notebook/lakehouse creation (already covered in [spark-item-migration.md](resources/spark-item-migration.md) and [lake-database-migration.md](resources/lake-database-migration.md))
-- [SQLDW-AUTHORING-CORE.md](../../common/SQLDW-AUTHORING-CORE.md) — Fabric Warehouse T-SQL (delegate to `sqldw-authoring-cli` skill)
+For full-workspace orchestration, read [migration-orchestrator.md](resources/migration-orchestrator.md). For a Dedicated Pool-to-Lakehouse migration, use [dedicated-pool-to-lakehouse.md](resources/dedicated-pool-to-lakehouse.md) as the phase router. For a Warehouse target, load only the matching `dw-*` resource.
 
-> **Auth, API endpoints, and item payloads are fully documented in this skill's own files.** The common docs above are fallback references only.
+## Scope Routing
 
----
-
-## Table of Contents
-
-| Topic | Reference |
-|---|---|
-| **Migration Orchestrator** | [migration-orchestrator.md](resources/migration-orchestrator.md) |
-| API-Driven Migration Workflow | [§ API-Driven Migration Workflow](#api-driven-migration-workflow) |
-| Migration Workload Map | [§ Migration Workload Map](#migration-workload-map) |
-| Spark Pool → Environment Migration | [spark-pool-migration.md](resources/spark-pool-migration.md) |
-| Lake Database → Lakehouse Migration | [lake-database-migration.md](resources/lake-database-migration.md) |
-| External Hive Metastore → Lakehouse Migration | [external-hms-migration.md](resources/external-hms-migration.md) |
-| Notebook & SJD Migration | [spark-item-migration.md](resources/spark-item-migration.md) |
-| Library Compatibility (Synapse vs. Fabric RT 1.3) | [library-compatibility.md](resources/library-compatibility.md) |
-| Connector Refactoring (Kusto, Cosmos DB, ADLS OAuth) | [connector-refactoring.md](resources/connector-refactoring.md) |
-| `mssparkutils` → `notebookutils` API Mapping | [utility-api-mapping.md](resources/utility-api-mapping.md) |
-| Linked Services → Data Connections / Shortcuts | [connectivity-migration.md](resources/connectivity-migration.md) |
-| Before/After Code Patterns (incl. Catalog API gaps) | [code-patterns.md](resources/code-patterns.md) |
-| Migration Report (with Fabric portal links) | [migration-report.md](resources/migration-report.md) |
-| Migration Troubleshooting Guide | [migration-gotchas.md](resources/migration-gotchas.md) |
-| Validation & Testing | [validation-testing.md](resources/validation-testing.md) |
-| Security & Governance (Production Readiness) | [security-governance.md](resources/security-governance.md) |
-| T-SQL & Spark Configuration Differences | [§ T-SQL & Spark Configuration Differences](#t-sql--spark-configuration-differences) |
-| Capacity Sizing Reference | [§ Capacity Sizing Reference](#capacity-sizing-reference) |
-| Must / Prefer / Avoid | [§ Must / Prefer / Avoid](#must--prefer--avoid) |
-| Feature Parity Reference | [§ Feature Parity Reference](#feature-parity-reference) |
-| Migration Gotchas — Quick Reference | [§ Migration Gotchas](#migration-gotchas--quick-reference) + [migration-gotchas.md](resources/migration-gotchas.md) |
-| Post-Migration: What's Next | [§ Post-Migration: What's Next](#post-migration-whats-next) |
-
-### Context Loading Guide
-
-> **IMPORTANT — Load only what you need.** Do NOT read all resource files upfront. Load the specific file for the phase you are executing:
-
-| When | Read This File | Lines |
+| Request | Action | Load |
 |---|---|---|
-| User asks to migrate a workspace (full orchestration) | [migration-orchestrator.md](resources/migration-orchestrator.md) | ~1264 |
-| Phase 0: Spark Pools → Environments | [spark-pool-migration.md](resources/spark-pool-migration.md) | ~290 |
-| Phase 1: Databases → Lakehouses (built-in HMS) | [lake-database-migration.md](resources/lake-database-migration.md) | ~574 |
-| Phase 1: Databases → Lakehouses (external HMS) | [external-hms-migration.md](resources/external-hms-migration.md) | ~388 |
-| Phase 2–3: Notebooks & SJDs | [spark-item-migration.md](resources/spark-item-migration.md) | ~326 |
-| Code refactoring (mssparkutils, connectors) | [utility-api-mapping.md](resources/utility-api-mapping.md) + [connector-refactoring.md](resources/connector-refactoring.md) + [code-patterns.md](resources/code-patterns.md) | ~588 |
-| Post-migration validation | [validation-testing.md](resources/validation-testing.md) | ~487 |
-| Troubleshooting failures | [migration-gotchas.md](resources/migration-gotchas.md) | ~225 |
-| Production security setup | [security-governance.md](resources/security-governance.md) | ~926 |
-| Library version gaps | [library-compatibility.md](resources/library-compatibility.md) | ~106 |
-| Generating migration report | [migration-report.md](resources/migration-report.md) | ~360 |
-| Capacity sizing & SKU planning | [capacity-sizing.md](resources/capacity-sizing.md) | ~85 |
-| Feature parity matrix | [feature-parity.md](resources/feature-parity.md) | ~65 |
+| Full Synapse workspace migration | Run phased discovery and migration | [migration-orchestrator.md](resources/migration-orchestrator.md) |
+| Dedicated SQL Pool schema/code to Lakehouse | Run the strict assessment-to-validation workflow. For guidance-only notebook publication, explicitly state: "The stored procedures were converted from T-SQL to Spark SQL before publication." | [dedicated-pool-to-lakehouse.md](resources/dedicated-pool-to-lakehouse.md) |
+| Guidance-only Dedicated Pool incremental deployment hardening | Answer directly from the focused checklist; do not search scripts or load phase resources. State: "For columns with special characters, enable Delta `columnMapping` selectively and only with approval." | [dedicated-pool-execution-contracts.md](references/dedicated-pool-execution-contracts.md#guidance-only-incremental-deployment-hardening) |
+| Large or complex stored procedure | For a complete offline contract, read only the audit resource once, use one run-local generator and one verifier, do not inspect implementation scripts or generated outputs, and stop after successful verification | [dedicated-pool-large-procedure-audit.md](resources/dedicated-pool-large-procedure-audit.md) |
+| Spark pool | Convert configuration and libraries to a Fabric Environment | [spark-pool-migration.md](resources/spark-pool-migration.md) |
+| Lake Database or HMS | Create or bind the target Lakehouse | [lake-database-migration.md](resources/lake-database-migration.md) or [external-hms-migration.md](resources/external-hms-migration.md) |
+| Notebook or Spark Job Definition | Port code, bindings, parameters, and runtime settings | [spark-item-migration.md](resources/spark-item-migration.md) |
+| Linked Service | Choose a Fabric Data Connection for external services or a OneLake Shortcut for ADLS Gen2/Blob | [connectivity-migration.md](resources/connectivity-migration.md) |
+| Approved dependent procedure callers | Run the internal closure-preserving sub-flow after notebook readback | [dedicated-pool-dependent-pipelines.md](resources/dedicated-pool-dependent-pipelines.md) |
+| Standalone pipeline migration | Delegate | `pipeline-migration` |
+| Dedicated SQL Pool to Fabric Warehouse | Run the source extraction, DDL compatibility, approval, optional data, security, and validation route | [dw-source-and-extraction.md](resources/dw-source-and-extraction.md), then the matching `dw-*` phase resource |
+| Standalone Fabric Warehouse administration | Delegate | `sqldw-cli` |
+| Synapse Link | Use Fabric Mirroring; not covered here | — |
 
----
+Always report the Lake Database/HMS phase. If none is discovered, mark it `NotApplicable (none discovered)` while retaining the required target Lakehouse binding.
 
-## API-Driven Migration Workflow
+## Load References On Demand
 
-This skill supports programmatic migration of Synapse Spark items via REST APIs (no UI-based Migration Assistant required).
+Do not preload all files. Load only the references needed for the current phase:
 
-### Authentication
-
-| Target | Token Audience |
+| Need | Reference |
 |---|---|
-| Synapse ARM (management plane) | `https://management.azure.com` |
-| Synapse Data Plane | `https://dev.azuresynapse.net` |
-| Fabric REST API | `https://api.fabric.microsoft.com` |
+| Routing, phase order, API audiences, quick examples, troubleshooting, or post-migration handoff | [workload-routing.md](references/workload-routing.md) |
+| Dedicated Pool execution variants and response contracts | [dedicated-pool-execution-contracts.md](references/dedicated-pool-execution-contracts.md) |
+| Dedicated Pool discovery | [dedicated-pool-discovery.md](resources/dedicated-pool-discovery.md) |
+| Gap assessment and mapping approval | [dedicated-pool-gap-assessment.md](resources/dedicated-pool-gap-assessment.md) |
+| Procedure conversion and notebook shape | [dedicated-pool-conversion.md](resources/dedicated-pool-conversion.md) |
+| Schema/notebook deployment | [dedicated-pool-deployment.md](resources/dedicated-pool-deployment.md) |
+| Dedicated Pool validation | [dedicated-pool-validation.md](resources/dedicated-pool-validation.md) |
+| Runtime/library compatibility | [feature-parity.md](resources/feature-parity.md) and [library-compatibility.md](resources/library-compatibility.md) |
+| `mssparkutils` and connector refactoring | [utility-api-mapping.md](resources/utility-api-mapping.md), [connector-refactoring.md](resources/connector-refactoring.md), and [code-patterns.md](resources/code-patterns.md) |
+| Capacity planning | [capacity-sizing.md](resources/capacity-sizing.md) |
+| Dedicated Pool-to-Warehouse source discovery and extraction | [dw-source-and-extraction.md](resources/dw-source-and-extraction.md) |
+| Warehouse DDL compatibility and deployment | [dw-ddl-compatibility.md](resources/dw-ddl-compatibility.md) |
+| Separately approved Warehouse data migration | [dw-data-migration.md](resources/dw-data-migration.md) |
+| Warehouse security and validation | [dw-security-validation.md](resources/dw-security-validation.md) |
+| Validation, reporting, and production readiness | [validation-testing.md](resources/validation-testing.md), [migration-report.md](resources/migration-report.md), and [security-governance.md](resources/security-governance.md) |
 
-> Use the token-acquisition recipe in [COMMON-CLI § Authentication Recipes](../../common/COMMON-CLI.md#authentication-recipes) with the audiences above.
+Use [COMMON-CLI.md](../../common/COMMON-CLI.md) only for shared authentication and `az rest` mechanics not already covered by the phase resource. Use [COMMON-CORE.md](../../common/COMMON-CORE.md) only for shared Fabric REST patterns.
 
-### Migration Phases (Execute in Order)
+## Must
 
-| Phase | Synapse Source | Fabric Target | Resource |
-|---|---|---|---|
-| Phase 0 | Spark Pool | Environment | [spark-pool-migration.md](resources/spark-pool-migration.md) |
-| Phase 1 | Lake Database (built-in HMS) | Lakehouse | [lake-database-migration.md](resources/lake-database-migration.md) |
-| Phase 1 | External Hive Metastore | Lakehouse | [external-hms-migration.md](resources/external-hms-migration.md) |
-| Phase 1b | Ad-hoc `abfss://` storage paths | OneLake Shortcuts | [migration-orchestrator.md](resources/migration-orchestrator.md) (migrate-and-modernize only) |
-| Phase 2 | Notebooks | Notebook | [spark-item-migration.md](resources/spark-item-migration.md) |
-| Phase 3 | Spark Job Definitions | SJD | [spark-item-migration.md](resources/spark-item-migration.md) |
-| Final | Validation & Testing | — | [validation-testing.md](resources/validation-testing.md) |
-| Optional | Security & Governance | — | [security-governance.md](resources/security-governance.md) |
+- Preserve every stored-procedure input contract, source default, source decision, and approved target mapping.
+- Block conversion until gap dispositions, notebook names, dependency grouping, and target workspace placement are explicitly approved.
+- Use SqlPackage/DMVs for source discovery, Fabric REST for item management, and Fabric Livy statements for Lakehouse schema and Delta execution.
+- Run the maintained validators required by the selected execution contract; never replace them with ad hoc JSON or cell-shape checks.
+- Choose the Lakehouse or Warehouse target before loading implementation resources; never apply Warehouse data-movement rules to Lakehouse artifact conversion.
+- Before persisting any dependent-pipeline source definition, recursively inspect it for secret-bearing or uncertain properties; block the complete selected closure without writing the artifact or mutating a target when any are found.
+- In every dependent-pipeline response, including guidance-only and pre-approval explanations, state: "Use a `TridentNotebook` activity with exact target identities `typeProperties.notebookId` and `typeProperties.workspaceId`, and pass inputs through `typeProperties.notebookParameters`." Then state: "After deployment, read back each pipeline with `POST /v1/workspaces/{workspaceId}/items/{dataPipelineId}/getDefinition` and validate its canonical hash and structural bindings."
+- For every Linked Service response, first state both replacement classes: Fabric Data Connections for external databases/services and OneLake Shortcuts for ADLS Gen2/Blob storage; then identify which class applies.
+- Replace `mssparkutils` with `notebookutils`, Linked Services with the correct Fabric connection class, and `spark.read.synapsesql()` with a supported OneLake or JDBC pattern.
+- Externalize workspace and item IDs through parameters or Variable Libraries.
+- Keep phase status concise, emit bounded heartbeats for long operations, and persist per-object evidence in the manifest.
 
-> **Phase order matters**: Environments (Phase 0) must exist before notebooks/SJDs can bind to them. Lakehouses (Phase 1) must exist before notebooks can bind to them (Phase 2).
+## Prefer
 
-> For the full execution flow with sub-steps, decision points, lift-and-shift vs. modernize paths, and error recovery, see [migration-orchestrator.md](resources/migration-orchestrator.md).
+- OneLake Shortcuts over copying data.
+- Fabric Environments for reproducible libraries and Spark settings.
+- Incremental, dependency-ordered migration over big-bang cutover.
+- Parameterized notebooks and Variable Libraries for environment promotion.
+- Lakehouse SQL Endpoint for compatible Serverless SQL Pool read workloads.
 
-### REST API Quick Reference
+## Avoid
 
-All Synapse and Fabric API endpoints with request/response examples are in [migration-orchestrator.md](resources/migration-orchestrator.md) (Steps 2a–2e). Authentication tokens:
-
-| Target | Token Audience |
-|---|---|
-| Synapse ARM | `https://management.azure.com` |
-| Synapse Data Plane | `https://dev.azuresynapse.net` |
-| Fabric REST API | `https://api.fabric.microsoft.com` |
-
-> **API docs**: [Synapse ARM](https://learn.microsoft.com/en-us/rest/api/synapse) · [Synapse Data Plane](https://learn.microsoft.com/en-us/rest/api/synapse/data-plane) · [Fabric Items](https://learn.microsoft.com/en-us/rest/api/fabric/core/items) · [Fabric Shortcuts](https://learn.microsoft.com/en-us/rest/api/fabric/core/onelake-shortcuts) · [Fabric Connections](https://learn.microsoft.com/en-us/rest/api/fabric/core/connections) · [Fabric Environments](https://learn.microsoft.com/en-us/rest/api/fabric/environment)
-
----
-
-## Migration Workload Map
-
-Use this table to determine the correct Fabric target for each Synapse component:
-
-| Synapse Component | Fabric Target | Notes |
-|---|---|---|
-| **Spark Pool** (notebooks, jobs) | Fabric Spark (Lakehouse / Notebooks / SJD) | Starter Pool replaces on-demand pools for most workloads |
-| **Dedicated SQL Pool** | **Fabric Warehouse** | T-SQL surface area differences apply — see [§ T-SQL & Spark Configuration Differences](#t-sql--spark-configuration-differences). *Procedural migration guide not yet available — separate migration track. For T-SQL authoring, delegate to `sqldw-authoring-cli`.* |
-| **Serverless SQL Pool** | **Lakehouse SQL Endpoint** | Read-only Delta/Parquet queries; no DDL required |
-| **Synapse Pipelines** | **Fabric Data Pipelines** | Activity types, triggers, and expressions are broadly compatible. *Pipeline migration resource not yet available — separate migration track.* |
-| **Synapse Link for Cosmos DB / SQL** | **Fabric Mirroring** | Native mirroring replaces the Synapse Link connector pattern. *Not covered by this skill.* |
-| **Linked Services** | **Data Connections** (external) / **OneLake Shortcuts** (storage) | See [connectivity-migration.md](resources/connectivity-migration.md) |
-| **Integration Datasets** | **Fabric Pipeline source/sink config** | Dataset definitions are inlined into pipeline activities in Fabric. *Not covered by this skill.* |
-| **Managed Virtual Networks** | **Fabric Managed Private Endpoints** | Configure in Fabric capacity settings |
-| **Synapse Studio** | **Fabric workspace** | All artifact types live in a single workspace with Git integration |
-
-### Decision Tree: Which Fabric Spark Workload?
-
-```text
-Synapse Spark workload
-├── Interactive notebook with data exploration → Fabric Notebook (attached to Lakehouse)
-├── Scheduled/production job → Spark Job Definition (SJD)
-├── T-SQL over files/Delta → Lakehouse SQL Endpoint (no migration needed — just point to OneLake)
-└── Real-time ingest → Fabric Eventstream + Lakehouse
-```
-
----
-
-## T-SQL & Spark Configuration Differences
-
-For detailed T-SQL surface area gaps (PolyBase → `COPY INTO`, distribution hints, result set caching) and Spark configuration mappings (pools, `%%configure`, runtime versions), see [feature-parity.md](resources/feature-parity.md).
-
-> **Key actions**: Remove `DISTRIBUTION = HASH(col)` hints, replace `CREATE EXTERNAL TABLE` with `COPY INTO`, replace `spark.read.synapsesql()` with OneLake shortcuts or JDBC. Delegate T-SQL authoring to `sqldw-authoring-cli`.
-
----
-
-## Capacity Sizing Reference
-
-For Synapse pool → Fabric SKU mapping tables, sizing decision guide, and cost model comparison, see [capacity-sizing.md](resources/capacity-sizing.md).
-
-> **Quick guide**: Dev/test = F8–F16 with Starter Pool; standard production = F32–F64; enterprise = F128+. Use Fabric Trial (free F64, 60 days) for migration validation.
-
----
-
-## Must / Prefer / Avoid
-
-### MUST DO
-- **Replace all `mssparkutils` imports with `notebookutils`** — see [utility-api-mapping.md](resources/utility-api-mapping.md) for the complete namespace table
-- **Replace all Linked Services** with Fabric Data Connections (for external databases/services) or OneLake Shortcuts (for ADLS Gen2 / Blob storage mounts) — see [connectivity-migration.md](resources/connectivity-migration.md)
-- **Replace `spark.read.synapsesql()`** with Lakehouse shortcut reads or JDBC connections to the Fabric Warehouse SQL endpoint
-- **Re-test all notebooks** after migration against the target Fabric Runtime version — Spark minor version differences can surface deprecated API warnings
-- **Externalize all workspace/item IDs** — never hardcode; use pipeline parameters or [Variable Libraries](#variable-library-for-environment-promotion)
-- **Replace pool-level library installs** with Fabric Environments attached at the workspace or notebook level
-
-### PREFER
-- **OneLake Shortcuts over full data copies** — mount existing ADLS Gen2 containers as shortcuts rather than re-ingesting data during migration
-- **Fabric Starter Pool** for dev/test migrations — eliminates pool warm-up wait time inherent in Synapse on-demand pools
-- **Lakehouse SQL Endpoint** as a drop-in for Serverless SQL Pool reads — point existing consumers at the endpoint with minimal query changes
-- **Medallion architecture** for migrated data — align with Bronze/Silver/Gold patterns (see `e2e-medallion-architecture` skill)
-- **Incremental migration** — migrate and validate workload by workload rather than performing a big-bang cutover
-- **Parameterized notebooks** to allow environment promotion (dev → test → prod) without code changes
-
-### AVOID
-- **Do not copy-paste PolyBase `CREATE EXTERNAL TABLE` DDL** into Fabric Warehouse — rewrite as `COPY INTO` or use Lakehouse for external data access
-- **Do not assume Synapse Linked Service connection strings are reusable** — credentials and endpoints must be reconfigured as Fabric Data Connections
-- **Do not install libraries in notebook cells** (`%pip install` at runtime) for production workloads — use Fabric Environments for reproducible, versioned library management
-- **Do not migrate Dedicated SQL Pool distribution hints** (`HASH`, `ROUND_ROBIN`, `REPLICATE`) verbatim — remove them; Fabric Warehouse handles distribution automatically
-- **Do not use `wasb://` or `abfss://container@storageaccount.dfs.core.windows.net/` paths** as primary data paths — migrate data access to OneLake `abfss://workspace@onelake.dfs.fabric.microsoft.com/` paths
-
----
+- Do not execute generated notebooks or pipelines as part of artifact migration.
+- Do not broaden a selected dependent-pipeline closure or route that internal sub-flow to `pipeline-migration`.
+- Do not use `sqlcmd` against the target Fabric Warehouse; use the registered SQL endpoint tooling required by the Warehouse resource.
+- Do not preserve Synapse distribution/storage hints, PolyBase DDL, Linked Service connection strings, or pool-level library installation patterns verbatim.
+- Do not use target notebooks to orchestrate the migration itself.
+- Do not hardcode workspace IDs, item IDs, credentials, connection strings, or environment-specific paths.
 
 ## Examples
 
-See [code-patterns.md](resources/code-patterns.md) for full before/after examples. Key quick references:
+**Prompt:** "Migrate this Dedicated SQL Pool DACPAC to a Fabric Lakehouse and convert the procedures."
 
-**`mssparkutils.env` → `notebookutils.runtime`**
+**Response behavior:** Assess gaps first, present and obtain approval for the complete procedure-to-notebook mapping and workspace placement, create the manifest, convert approved schema/code artifacts without moving source rows, validate persisted definitions, and report the resolved Lakehouse and artifact evidence.
 
-```python
-# Synapse
-workspace = mssparkutils.env.getWorkspaceName()
+**Prompt:** "Migrate this ADF pipeline to Fabric."
 
-# Fabric
-workspace = notebookutils.runtime.context["workspaceName"]
-```
+**Response behavior:** Route to `pipeline-migration`. Keep it here only when the pipeline is an explicitly approved dependent caller discovered inside an active Dedicated Pool-to-Lakehouse migration.
 
-**Linked Service credential → Key Vault secret**
+**Prompt:** "Migrate this Dedicated SQL Pool to Fabric Warehouse."
 
-```python
-# Synapse
-conn = mssparkutils.credentials.getConnectionStringOrCreds("MyLinkedService")
+**Response behavior:** Keep this inside `synapse-migration`, assess DDL compatibility, remove unsupported distribution and columnstore declarations, obtain provisioning consent, and ask separately before any restored-source data migration.
 
-# Fabric
-conn = notebookutils.credentials.getSecret("https://myvault.vault.azure.net/", "my-secret")
-```
-
-**Dedicated SQL Pool DDL → Fabric Warehouse DDL**
-
-```sql
--- Synapse (remove distribution hints)
-CREATE TABLE dbo.Fact (...) WITH (DISTRIBUTION = HASH(id), CLUSTERED COLUMNSTORE INDEX);
-
--- Fabric Warehouse
-CREATE TABLE dbo.Fact (...);
-```
-
----
-
-## Feature Parity Reference
-
-Full Synapse → Fabric feature matrix (28 features), T-SQL surface area gaps, and Spark configuration differences are in [feature-parity.md](resources/feature-parity.md).
-
-> **Key gaps** (⚠️/❌): `spark.read.synapsesql()` replaced by JDBC/shortcuts · Linked Services redesigned as Data Connections/Shortcuts · External HMS partial (migrate as shortcuts) · `mssparkutils.env` renamed to `notebookutils.runtime` · Result set caching ❌ · Workload management ❌ · PolyBase → `COPY INTO`
-
----
-
-## Migration Gotchas — Quick Reference
-
-The full troubleshooting guide with code examples and multi-option resolutions is in [migration-gotchas.md](resources/migration-gotchas.md). This summary surfaces the key issues for quick scanning during migration:
-
-| # | Flag ID | Issue | Severity | Blocks? | Resolution Summary |
-|---|---|---|---|---|---|
-| G1 | `SYNAPSESQL_NO_EQUIVALENT` | `spark.read.synapsesql()` has no Fabric equivalent | High | Yes | Replace with OneLake shortcut read, Warehouse JDBC, or Data Pipeline |
-| G2 | `LIBRARY_VERSION_CONFLICT` | Custom library version conflicts with Fabric Runtime | Medium | Maybe | Pin compatible version in Environment, or find Fabric-native alternative |
-| G3 | `DELTA_PROTOCOL_MISMATCH` | Delta protocol version incompatibility | High | Yes | Rewrite table with matching protocol (`delta.minReaderVersion`/`minWriterVersion`) |
-| G4 | `SECURITY_MODEL_INCOMPATIBLE` | Synapse managed identity / IP firewall not portable | Medium | Yes | Reconfigure as Workspace Identity + Fabric Managed Private Endpoints |
-| G5 | `GPU_POOL_UNSUPPORTED` | GPU-accelerated Spark pools not available in Fabric | High | Yes | Migration blocker — keep workload in Synapse or use Azure ML |
-| G6 | `DOTNET_SPARK_UNSUPPORTED` | .NET for Spark (C#/F# SJDs) not supported | High | Yes | Migration blocker — rewrite in PySpark or keep in Synapse |
-| G7 | `NULLABLE_POOL_REFERENCE` | `bigDataPool`/`targetBigDataPool` field is `null` (not missing) — causes `NoneType` crash | Medium | No | Use `(x.get("bigDataPool") or {}).get(...)` pattern |
-| G8 | `SESSION_CONFIG_IGNORED` | Some `%%configure` keys silently ignored in Fabric | Low | No | Remove unsupported keys; use Environment for pool-level config |
-| G9 | `SHORTCUT_CONNECTION_FAILED` | ADLS shortcut creation fails (connection/permission) | High | Partial | Verify connection credential type (Key > WorkspaceIdentity > OAuth2) and RBAC |
-
----
-
-## Post-Migration: What's Next
-
-After completing Phases 0–3 and validation, hand off to these companion skills for ongoing operations:
-
-### Agentic Exploration Workflow
-
-Once data has landed in Fabric Lakehouses, use this sequence to validate and explore:
-
-1. **Discover** → List schemas, tables, and row counts via Lakehouse SQL Endpoint (`sqldw-consumption-cli`)
-2. **Sample** → `SELECT TOP 5` on migrated tables to verify data integrity
-3. **Validate** → Run validation checks from [validation-testing.md](resources/validation-testing.md) (V1–V6)
-4. **Explore** → Write Spark or T-SQL queries against migrated data using `spark-consumption-cli` or `sqldw-consumption-cli`
-5. **Build** → Create Gold-layer aggregations with `e2e-medallion-architecture` (Bronze → Silver → Gold)
-6. **Consume** → Build semantic models and reports with `semantic-model-authoring`
-
-### Companion Skill Cross-References
-
-| Post-Migration Task | Skill | When to Use |
-|---|---|---|
-| Interactive Lakehouse SQL queries | `sqldw-consumption-cli` | Exploring migrated data via SQL Endpoint |
-| Interactive PySpark exploration | `spark-consumption-cli` | Ad-hoc Spark queries on migrated Lakehouses |
-| Notebook & SJD authoring (new) | `spark-authoring-cli` | Creating new Spark items post-migration |
-| Medallion architecture build-out | `e2e-medallion-architecture` | Structuring Bronze/Silver/Gold after lift-and-shift |
-| Warehouse performance monitoring | `sqldw-operations-cli` | Diagnosing slow queries on Fabric Warehouse |
-| Semantic model creation | `semantic-model-authoring` | Building Power BI models over migrated data |
-| Report consumption & DAX | `semantic-model-consumption` | Querying existing semantic models |
-| KQL analytics | `eventhouse-authoring-cli` / `eventhouse-consumption-cli` | If migrating real-time workloads to Eventhouse |
-
-### Variable Library for Environment Promotion
-
-After migration, avoid hardcoded workspace/item IDs by centralizing configuration in a **Variable Library** item:
-
-```python
-# Read config from Variable Library — works in notebooks
-lib = notebookutils.variableLibrary.getLibrary("MigrationConfig")
-lakehouse_name = lib.lakehouse_name
-workspace_id = lib.workspace_id
-
-# ❌ WRONG — .get() does not exist
-# notebookutils.variableLibrary.get("MigrationConfig", "lakehouse_name")
-```
-
-- Use **Value Sets** (`valueSets/dev.json`, `valueSets/prod.json`) to promote across environments without code changes
-- Boolean values are returned as strings — compare with `.lower() == "true"`, not `bool()`
-- In Data Pipelines, reference via `@pipeline().libraryVariables.<name>` (not `@variables()`)
-- Full Variable Library patterns → see [common/notebook-authoring/context-and-params.md § Variable Library](../../common/notebook-authoring/context-and-params.md#variable-library)
+For code transformations and edge cases, load [workload-routing.md](references/workload-routing.md) and the phase-specific resource rather than expanding the main instructions.
