@@ -1,0 +1,5 @@
+I have a Power BI semantic model called TaxiGold.
+
+Plan a Power BI report for taxi fleet managers: propose the pages, the key visuals, and the measures I'll need.
+
+Then build the first page and define the row-level security role filters so each borough manager sees only their own zones. Keep role-member assignment separate; I'll manage that in the Power BI service.

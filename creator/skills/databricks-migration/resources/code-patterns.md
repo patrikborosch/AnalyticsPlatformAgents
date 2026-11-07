@@ -125,15 +125,15 @@ environment = dbutils.widgets.get("environment")
 
 # AFTER — Fabric: use a "parameters" tagged cell
 # Tag the cell below as "parameters" in the notebook UI
+# Pipeline Base parameters or parent-notebook arguments override these defaults
+# by injecting the runtime values into a generated cell.
 batch_date = "2024-01-01"   # overridden by pipeline or parent notebook at runtime
 environment = "dev"
-
-# Read pipeline-injected values programmatically (if needed):
-ctx = notebookutils.runtime.context
-params = ctx.get("parameters", {})
-batch_date = params.get("batch_date", "2024-01-01")
-environment = params.get("environment", "dev")
 ```
+
+`notebookutils.runtime.context` contains execution metadata such as workspace,
+notebook, activity, and user identifiers. It does **not** store notebook
+parameter values; use the variables overridden from the marked parameters cell.
 
 ---
 
@@ -146,7 +146,7 @@ orders    = spark.read.table("prod.silver.orders")
 result    = customers.join(orders, "customer_id")
 result.write.format("delta").mode("overwrite").saveAsTable("prod.gold.customer_orders")
 
-# AFTER — Fabric: 2-level (catalog removed; Lakehouse context provides catalog)
+# AFTER — Fabric: the attached Lakehouse represents the source catalog
 customers = spark.read.table("silver.customers")
 orders    = spark.read.table("silver.orders")
 result    = customers.join(orders, "customer_id")
