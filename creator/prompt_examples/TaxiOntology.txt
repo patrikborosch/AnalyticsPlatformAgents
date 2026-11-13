@@ -1,0 +1,9 @@
+I have cleaned NYC taxi tables in a lakehouse called TaxiGold (trips, zones, vehicles, drivers).
+
+Create a Fabric IQ Ontology that models Trip, Zone, Vehicle, and Driver as entity types with their key properties.
+
+Add the relationships between them: a Trip starts and ends in a Zone, and is served by a Vehicle and a Driver.
+
+Bind each entity type to its lakehouse table, and add pickup and drop-off timestamps, trip duration, and fare as properties on Trip.
+
+Preview the ontology before you deploy it.
