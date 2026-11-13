@@ -1,0 +1,5 @@
+Create a Dataflow Gen2 that pulls the NYC taxi zone lookup CSV from a public URL, cleans up the column names, and filters to Manhattan zones.
+
+Land the result in my TaxiSilver lakehouse.
+
+Preview the transformation before you publish it.

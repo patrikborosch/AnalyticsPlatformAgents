@@ -94,9 +94,9 @@ job_id = mssparkutils.env.getJobId()
 
 # AFTER — Fabric: read from runtime context dict
 ctx = notebookutils.runtime.context
-workspace = ctx["workspaceName"]
-job_id = ctx["jobId"]
-workspace_id = ctx["workspaceId"]
+workspace = ctx["currentWorkspaceName"]
+job_id = ctx["activityId"]
+workspace_id = ctx["currentWorkspaceId"]
 ```
 
 ---
