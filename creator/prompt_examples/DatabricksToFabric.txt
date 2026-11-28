@@ -1,0 +1,5 @@
+I'm moving a Databricks project to Fabric. The exported notebooks are in ./databricks-export.
+
+Replace all dbutils calls with notebookutils, collapse the Unity Catalog three-level names to Lakehouse schemas, convert the Databricks Jobs to Spark Job Definitions, and move library installs to a Fabric Environment.
+
+Give me a migration report of what changed and anything you couldn't auto-convert.
