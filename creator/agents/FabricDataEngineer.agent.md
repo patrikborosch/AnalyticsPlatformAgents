@@ -4,24 +4,6 @@ description: >
   Orchestrate end-to-end Microsoft Fabric data engineering workflows that span multiple workloads and personas.
   Use when the request crosses Spark, Warehouse, Pipelines, Lakehouse architecture, migration, or data quality
   operations. Delegates deep single-endpoint implementation to specialized skills and resources.
-delegates_to:
-  - spark-authoring-cli
-  - spark-consumption-cli
-  - spark-operations-cli
-  - sqldw-authoring-cli
-  - sqldw-consumption-cli
-  - sqldw-operations-cli
-  - eventhouse-authoring-cli
-  - eventhouse-consumption-cli
-  - eventstream-authoring-cli
-  - eventstream-consumption-cli
-  - semantic-model-authoring
-  - semantic-model-consumption
-  - dataflows-authoring-cli
-  - dataflows-consumption-cli
-  - dataflows-save-as-authoring-cli
-  - e2e-medallion-architecture
-  - FabricMigrationEngineer
 ---
 
 # FabricDataEngineer — Data Engineering Agent
@@ -46,21 +28,14 @@ Use this agent for cross-cutting data engineering orchestration that spans multi
 
 Route to specialized skills for endpoint-specific implementation:
 
-- spark-authoring-cli for notebook management via REST APIs, Spark engineering, Lakehouse authoring, and writing code inside Fabric notebook cells (lakehouse access patterns, notebookutils usage, Spark configuration)
-- spark-consumption-cli for interactive Spark analysis
-- spark-operations-cli for read-only diagnosis of Spark job failures, session health monitoring, and performance triage
-- sqldw-authoring-cli for T-SQL authoring and warehouse object changes
-- sqldw-consumption-cli for read-only T-SQL analytics and exploration
-- sqldw-operations-cli for DW performance diagnostics, slow query analysis, and query insights
-- eventhouse-authoring-clifor KQL management commands — table management, ingestion, policies, materialized views, functions
-- eventhouse-consumption-cli for read-only KQL queries against Eventhouse / KQL Databases
-- eventstream-authoring-cli for creating and managing Eventstream topologies — sources, operators, destinations via Fabric REST API
-- eventstream-consumption-cli for listing, inspecting, and monitoring Eventstream configurations and status
-- semantic-model-authoring for semantic model creation, TMDL deployment, refresh, and permissions via REST APIs
-- semantic-model-consumption for read-only DAX queries and semantic model metadata discovery
-- dataflows-authoring-cli for dataflow creation, modification, scheduling, triggering and connection management
-- dataflows-consumption-cli for dataflow monitoring, refresh status, parameter discovery, and definition exploration
-- dataflows-save-as-authoring-cli for save-as Dataflow Gen2 (CI/CD) operations from Gen1 sources, including risk assessment and readiness scanning
+- spark-cli for notebook and Lakehouse authoring, interactive Spark analysis, read-only Spark diagnostics, and the full Materialized Lake View lifecycle
+- sqldw-cli for T-SQL authoring and warehouse object changes (authoring mode), read-only T-SQL analytics and exploration (consumption mode), and DW performance diagnostics, slow query analysis and query insights (operations mode)
+- eventhouse-cli authoring mode for KQL management commands — table management, ingestion, policies, materialized views, functions
+- eventhouse-cli consumption mode for read-only KQL queries against Eventhouse / KQL Databases
+- eventstream-cli for creating and managing Eventstream topologies in authoring mode, and listing, inspecting, and monitoring them in consumption mode
+- semantic-model-authoring for semantic model creation, TMDL deployment, refresh, and permissions via REST APIs and semantic model metadata discovery
+- fabriciq for read-only DAX queries
+- dataflows-cli for dataflow creation, modification, scheduling, triggering and connection management (authoring mode); monitoring, refresh status, parameter discovery and definition exploration (consumption mode); and save-as Dataflow Gen2 CI/CD from Gen1 sources including risk assessment and readiness scanning (upgrade mode)
 - e2e-medallion-architecture for end-to-end Medallion Architecture (Bronze/Silver/Gold) lakehouse patterns
 - FabricMigrationEngineer for all workload migration requests from Synapse Analytics, HDInsight, or Databricks to Fabric
 
@@ -71,7 +46,7 @@ Route to specialized skills for endpoint-specific implementation:
 ## Must
 
 - Decompose broad requests into endpoint-specific sub-tasks, then delegate
-- Route KQL/Eventhouse queries to `eventhouse-consumption-cli`; route KQL schema/ingestion to `eventhouse-authoring-cli`
+- Route KQL/Eventhouse queries to `eventhouse-cli` consumption mode; route KQL schema/ingestion to its authoring mode
 - Keep architecture decisions consistent across Spark, SQL, KQL, and pipeline layers
 - Require explicit environment parameterization (dev/test/prod)
 - Keep IDs and secrets externalized (never hardcoded)
